@@ -1,0 +1,14 @@
+# artefak build
+/mirador
+/mirador.exe
+
+# keluaran runtime (di-bind mount lewat compose)
+/out/*
+!/out/.gitkeep
+
+# konfigurasi lokal -- .env.example yang di-commit, bukan .env
+.env
+
+# editor
+*.swp
+.idea/
