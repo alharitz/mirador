@@ -121,6 +121,14 @@ impl Store {
         observed_at: &str,
     ) -> Result<(), StoreError> {
         let event = source_event(domain, namespace, event_id)?;
+        let envelope = ReplayEnvelope::Dns {
+            sequence,
+            result: result.clone(),
+            observed_at: observed_at.to_owned(),
+        };
+        if self.is_retry(&event, &envelope)? {
+            return Ok(());
+        }
         if matches!(
             &result,
             ProbeResult::Success(DnsObservation {
@@ -129,14 +137,6 @@ impl Store {
             })
         ) {
             return Err(StoreError::InvalidDnsObservation);
-        }
-        let envelope = ReplayEnvelope::Dns {
-            sequence,
-            result: result.clone(),
-            observed_at: observed_at.to_owned(),
-        };
-        if self.is_retry(&event, &envelope)? {
-            return Ok(());
         }
         let domain = event.domain.clone();
         if self
@@ -616,6 +616,28 @@ mod tests {
         after
             .observe_dns_event(DOMAIN, "dns", "accepted", 2, parked(), "accepted")
             .unwrap();
+        assert_unchanged(&before, &after);
+    }
+
+    #[test]
+    fn conflicting_replay_is_checked_before_dns_validation() {
+        let before = accepted_store();
+        let mut after = accepted_store();
+        assert_eq!(
+            after.observe_dns_event(
+                DOMAIN,
+                "dns",
+                "accepted",
+                2,
+                success(DnsProbeOutcome::ServFail),
+                "accepted",
+            ),
+            Err(StoreError::ConflictingReplay(SourceEvent {
+                domain: DOMAIN.into(),
+                namespace: "dns".into(),
+                event_id: "accepted".into(),
+            }))
+        );
         assert_unchanged(&before, &after);
     }
 
