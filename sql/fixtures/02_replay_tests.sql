@@ -31,7 +31,7 @@ SELECT pg_temp.assert_true(NOT EXISTS (
         ('domains','dns_streams','candidates','brands','events','dns_records','success_history','findings')
         AND a.attnum>0 AND NOT a.attisdropped AND a.atttypid='text'::regtype AND c.collname <> 'C'
 ), 'canonical text uses C collation');
--- Owner-session lock smoke check only; runtime grants/concurrent blocking remain pending.
+-- Owner-session lock smoke check only; non-owner grants and bounded concurrency are verified separately.
 SELECT public.lock_domain('identity.test');
 SELECT pg_temp.reject($q$SELECT public.lock_domain('missing.test')$q$, 'P0001');
 SELECT pg_temp.assert_true((SELECT prosecdef AND proconfig = ARRAY['search_path=pg_catalog, pg_temp']
