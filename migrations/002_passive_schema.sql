@@ -1,227 +1,155 @@
--- Migration 002: Passive PostgreSQL Schema for Mirador
--- PostgreSQL 16 target. Implements POSTGRES_CONTRACT.md invariants.
--- This migration ADDs to history; never destructively resets 001_passive_slice.sql.
+-- STANDALONE FRESH-SCHEMA DRAFT, PostgreSQL 16. NOT an additive migration.
+-- Names collide with incompatible 001_passive_slice.sql. Never run after 001.
+-- No destructive reset. Establish deployment history before any replacement.
+-- Live PostgreSQL verification, runtime-role grants, and adapter remain pending.
+BEGIN;
 
--- Deterministic C collation for identity and immutable text columns
--- Ensures exact, case-sensitive, byte-exact comparison
-
--- Domain lock anchor: persistent, created on first event for a domain
 CREATE TABLE domains (
     domain TEXT COLLATE "C" PRIMARY KEY,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    CHECK (octet_length(domain) BETWEEN 1 AND 253),
+    CHECK (domain ~ '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$')
 );
 
--- Brand associations: many-to-many, duplicate insertion is idempotent
+-- Lock domains first; reserve this stream even for errors before a candidate exists.
+CREATE TABLE dns_streams (
+    domain TEXT COLLATE "C" PRIMARY KEY REFERENCES domains ON DELETE RESTRICT,
+    namespace TEXT COLLATE "C" NOT NULL CHECK (namespace <> ''),
+    UNIQUE (domain, namespace)
+);
+
+CREATE TABLE candidates (
+    domain TEXT COLLATE "C" PRIMARY KEY REFERENCES domains ON DELETE RESTRICT,
+    status TEXT COLLATE "C" CHECK (status IN ('Unregistered', 'RegisteredParked', 'MailReady', 'Certified')),
+    dns_namespace TEXT COLLATE "C",
+    dns_sequence NUMERIC(20,0) CHECK (dns_sequence >= 0 AND dns_sequence <= 18446744073709551615),
+    ct_observed BOOLEAN NOT NULL DEFAULT FALSE,
+    CHECK (dns_sequence IS NULL OR dns_namespace IS NOT NULL),
+    FOREIGN KEY (domain, dns_namespace) REFERENCES dns_streams(domain, namespace) ON DELETE RESTRICT
+);
+
+-- Duplicate association insertion uses ON CONFLICT (domain, brand) DO NOTHING.
 CREATE TABLE brands (
-    domain TEXT COLLATE "C" NOT NULL REFERENCES domains(domain) ON DELETE RESTRICT,
-    brand TEXT COLLATE "C" NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    domain TEXT COLLATE "C" NOT NULL REFERENCES candidates ON DELETE RESTRICT,
+    brand TEXT COLLATE "C" NOT NULL CHECK (brand <> ''),
     PRIMARY KEY (domain, brand)
 );
 
--- Candidates: current applied state (separate from domain anchor)
--- Created when DNS success or CT event occurs; errors do not create candidates
-CREATE TABLE candidates (
-    domain TEXT COLLATE "C" PRIMARY KEY REFERENCES domains(domain) ON DELETE RESTRICT,
-    status TEXT COLLATE "C" NOT NULL,
-    dns_namespace TEXT COLLATE "C",          -- one DNS namespace per domain
-    dns_sequence NUMERIC(20,0),              -- u64 watermark; NULL when no success yet
-    ct_observed BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT candidates_status_check CHECK (status IN ('Unregistered', 'RegisteredParked', 'MailReady', 'Certified')),
-    CONSTRAINT candidates_dns_sequence_u64 CHECK (
-        dns_sequence IS NULL OR (dns_sequence >= 0 AND dns_sequence <= 18446744073709551615)
-    )
-);
-
--- Event identity registry: shared across DNS and CT
--- Exact identity: (domain, namespace, event_id). Cross-kind collision = conflicting replay.
--- Full immutable replay envelope preserved including kind and source timestamp string.
+-- Canonical replay envelope: typed scalar fields here, ordered DNS records below.
+-- No JSONB projection/hash: compare every field and ordered record, including NULLs.
+-- observed_at is exact opaque source text, not a timestamp or acceptance order.
+-- Facts formerly split into dns_facts/ct_facts/dns_errors now live in this one row,
+-- preventing missing/mismatched payload rows and retaining error status before candidates.
 CREATE TABLE events (
-    domain TEXT COLLATE "C" NOT NULL REFERENCES domains(domain) ON DELETE RESTRICT,
-    namespace TEXT COLLATE "C" NOT NULL,
-    event_id TEXT COLLATE "C" NOT NULL,
-    kind TEXT COLLATE "C" NOT NULL,                      -- 'dns' or 'ct'
-    sequence NUMERIC(20,0),                              -- DNS only; NULL for CT
-    observed_at TEXT COLLATE "C" NOT NULL,               -- opaque source timestamp string
-    raw_payload JSONB NOT NULL,                          -- full immutable replay envelope
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    domain TEXT COLLATE "C" NOT NULL REFERENCES domains ON DELETE RESTRICT,
+    namespace TEXT COLLATE "C" NOT NULL CHECK (namespace <> ''),
+    event_id TEXT COLLATE "C" NOT NULL CHECK (event_id <> ''),
+    kind TEXT COLLATE "C" NOT NULL CHECK (kind IN ('dns', 'ct')),
+    observed_at TEXT COLLATE "C" NOT NULL,
+    sequence NUMERIC(20,0) CHECK (sequence >= 0 AND sequence <= 18446744073709551615),
+    outcome TEXT COLLATE "C",
+    has_certificate BOOLEAN,
+    certificate_id TEXT COLLATE "C",
+    status_at_event TEXT COLLATE "C" CHECK (status_at_event IN ('Unregistered', 'RegisteredParked', 'MailReady', 'Certified')),
+    dns_namespace TEXT COLLATE "C" GENERATED ALWAYS AS (CASE WHEN kind = 'dns' THEN namespace END) STORED,
+    successful BOOLEAN GENERATED ALWAYS AS (kind = 'ct' OR outcome IN ('answer', 'nxdomain')) STORED,
+    success_event_id TEXT COLLATE "C" GENERATED ALWAYS AS (
+        CASE WHEN kind = 'ct' OR outcome IN ('answer', 'nxdomain') THEN event_id END
+    ) STORED,
     PRIMARY KEY (domain, namespace, event_id),
-    CONSTRAINT events_kind_check CHECK (kind IN ('dns', 'ct')),
-    CONSTRAINT events_sequence_u64 CHECK (
-        sequence IS NULL OR (sequence >= 0 AND sequence <= 18446744073709551615)
-    )
+    CONSTRAINT events_payload_shape CHECK (
+        (kind = 'ct' AND sequence IS NULL AND outcome IS NULL AND has_certificate IS NULL
+            AND certificate_id IS NOT NULL AND certificate_id <> '' AND status_at_event IS NULL)
+        OR
+        (kind = 'dns' AND sequence IS NOT NULL AND certificate_id IS NULL AND outcome IS NOT NULL AND (
+            (outcome IN ('answer', 'nxdomain') AND has_certificate IS NOT NULL AND status_at_event IS NULL)
+            OR (outcome IN ('servfail', 'timeout') AND has_certificate IS NULL)
+        ))
+    ),
+    FOREIGN KEY (domain, dns_namespace) REFERENCES dns_streams(domain, namespace) ON DELETE RESTRICT,
+    UNIQUE (domain, sequence),
+    UNIQUE (domain, namespace, event_id, outcome),
+    UNIQUE (domain, namespace, event_id, kind, successful),
+    UNIQUE (domain, namespace, event_id, observed_at)
 );
 
--- DNS sequence uniqueness across errors, stale successes, and applied successes
--- One DNS namespace per domain is enforced by candidate.dns_namespace + this index
-CREATE UNIQUE INDEX events_dns_sequence_unique
-    ON events (domain, sequence)
-    WHERE kind = 'dns';
-
--- DNS facts: detailed DNS observation data
--- Preserves full immutable payload: outcome, has_certificate, and ordered records
-CREATE TABLE dns_facts (
-    domain TEXT COLLATE "C" NOT NULL,
-    namespace TEXT COLLATE "C" NOT NULL,
-    event_id TEXT COLLATE "C" NOT NULL,
-    outcome TEXT COLLATE "C" NOT NULL,                   -- 'nxdomain', 'answer', 'servfail', 'timeout'
-    has_certificate BOOLEAN NOT NULL DEFAULT FALSE,      -- source payload only; not a CT latch
-    PRIMARY KEY (domain, namespace, event_id),
-    CONSTRAINT dns_facts_outcome_check CHECK (outcome IN ('nxdomain', 'answer', 'servfail', 'timeout')),
-    CONSTRAINT dns_facts_event_fk FOREIGN KEY (domain, namespace, event_id)
-        REFERENCES events(domain, namespace, event_id) ON DELETE RESTRICT
-);
-
--- DNS records: ordered with ordinals, duplicates remain distinct
--- Empty answers preserved (zero rows). Raw MX/NS strings kept without normalization.
+-- Ordinal preserves input order and duplicates; zero rows preserves empty answers.
+-- Raw MX/NS strings deliberately permit empty/mixed-case/trailing-dot values as core does.
 CREATE TABLE dns_records (
     domain TEXT COLLATE "C" NOT NULL,
     namespace TEXT COLLATE "C" NOT NULL,
     event_id TEXT COLLATE "C" NOT NULL,
-    ordinal INT NOT NULL,                                -- input order, 0-based
-    record_type TEXT COLLATE "C" NOT NULL,               -- 'A', 'MX', 'NS'
-    value_a INET,                                        -- A record: IPv4 address
-    value_mx_pref INT,                                   -- MX record: preference (0..65535)
-    value_mx_exchange TEXT COLLATE "C",                  -- MX record: exchange hostname
-    value_ns TEXT COLLATE "C",                           -- NS record: nameserver hostname
+    ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+    outcome TEXT COLLATE "C" NOT NULL DEFAULT 'answer' CHECK (outcome = 'answer'),
+    record_type TEXT COLLATE "C" NOT NULL CHECK (record_type IN ('A', 'MX', 'NS')),
+    value_a INET,
+    value_mx_pref INTEGER CHECK (value_mx_pref BETWEEN 0 AND 65535),
+    value_mx_exchange TEXT COLLATE "C",
+    value_ns TEXT COLLATE "C",
     PRIMARY KEY (domain, namespace, event_id, ordinal),
-    CONSTRAINT dns_records_type_check CHECK (record_type IN ('A', 'MX', 'NS')),
-    CONSTRAINT dns_records_mx_pref_check CHECK (
-        value_mx_pref IS NULL OR (value_mx_pref >= 0 AND value_mx_pref <= 65535)
+    CONSTRAINT dns_records_shape CHECK (
+        (record_type = 'A' AND value_a IS NOT NULL AND family(value_a) = 4 AND masklen(value_a) = 32
+            AND value_mx_pref IS NULL AND value_mx_exchange IS NULL AND value_ns IS NULL)
+        OR (record_type = 'MX' AND value_a IS NULL AND value_mx_pref IS NOT NULL
+            AND value_mx_exchange IS NOT NULL AND value_ns IS NULL)
+        OR (record_type = 'NS' AND value_a IS NULL AND value_mx_pref IS NULL
+            AND value_mx_exchange IS NULL AND value_ns IS NOT NULL)
     ),
-    CONSTRAINT dns_records_a_check CHECK (
-        record_type != 'A' OR value_a IS NOT NULL
-    ),
-    CONSTRAINT dns_records_mx_check CHECK (
-        record_type != 'MX' OR (value_mx_pref IS NOT NULL AND value_mx_exchange IS NOT NULL)
-    ),
-    CONSTRAINT dns_records_ns_check CHECK (
-        record_type != 'NS' OR value_ns IS NOT NULL
-    ),
-    CONSTRAINT dns_records_answer_only_check CHECK (
-        -- records only allowed on 'answer' outcome
-        NOT EXISTS (
-            SELECT 1 FROM dns_facts df
-            WHERE df.domain = dns_records.domain
-              AND df.namespace = dns_records.namespace
-              AND df.event_id = dns_records.event_id
-              AND df.outcome != 'answer'
-        )
-    ),
-    CONSTRAINT dns_records_event_fk FOREIGN KEY (domain, namespace, event_id)
-        REFERENCES events(domain, namespace, event_id) ON DELETE RESTRICT
+    FOREIGN KEY (domain, namespace, event_id, outcome)
+        REFERENCES events(domain, namespace, event_id, outcome) ON DELETE RESTRICT
 );
 
--- CT facts: certificate transparency evidence
--- Deduplicates by event identity (domain, namespace, event_id), NOT by certificate_id
-CREATE TABLE ct_facts (
-    domain TEXT COLLATE "C" NOT NULL,
-    namespace TEXT COLLATE "C" NOT NULL,
-    event_id TEXT COLLATE "C" NOT NULL,
-    certificate_id TEXT COLLATE "C" NOT NULL,
-    PRIMARY KEY (domain, namespace, event_id),
-    CONSTRAINT ct_facts_event_fk FOREIGN KEY (domain, namespace, event_id)
-        REFERENCES events(domain, namespace, event_id) ON DELETE RESTRICT
-);
-
--- Success history: one row per successful event (DNS success or CT)
--- Raw evidence reference, classified status, applied flag, database acceptance order
 CREATE TABLE success_history (
-    id BIGSERIAL PRIMARY KEY,
-    domain TEXT COLLATE "C" NOT NULL REFERENCES domains(domain) ON DELETE RESTRICT,
-    namespace TEXT COLLATE "C" NOT NULL,
-    event_id TEXT COLLATE "C" NOT NULL,
-    kind TEXT COLLATE "C" NOT NULL,                      -- 'dns' or 'ct'
-    status TEXT COLLATE "C" NOT NULL,                    -- classified status
-    applied BOOLEAN NOT NULL,                            -- whether this advanced candidate state
-    acceptance_order BIGINT NOT NULL UNIQUE,             -- database acceptance order (gaps harmless)
-    raw_evidence_ref JSONB NOT NULL,                     -- reference to raw evidence
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT success_history_kind_check CHECK (kind IN ('dns', 'ct')),
-    CONSTRAINT success_history_status_check CHECK (status IN ('Unregistered', 'RegisteredParked', 'MailReady', 'Certified')),
-    CONSTRAINT success_history_event_fk FOREIGN KEY (domain, namespace, event_id)
-        REFERENCES events(domain, namespace, event_id) ON DELETE RESTRICT,
-    -- One success history row per successful event
-    CONSTRAINT success_history_one_per_event UNIQUE (domain, namespace, event_id)
-);
-
--- Sequence for acceptance_order (monotonic, gaps harmless)
-CREATE SEQUENCE success_history_acceptance_order_seq;
-
--- DNS errors: preserve facts/status; do not advance watermark or create candidate
--- Errors have NO success_history row
-CREATE TABLE dns_errors (
+    acceptance_order BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     domain TEXT COLLATE "C" NOT NULL,
     namespace TEXT COLLATE "C" NOT NULL,
     event_id TEXT COLLATE "C" NOT NULL,
-    sequence NUMERIC(20,0) NOT NULL,
-    outcome TEXT COLLATE "C" NOT NULL,                   -- 'servfail', 'timeout'
-    status_at_event TEXT COLLATE "C",                    -- candidate status at error time (nullable)
-    observed_at TEXT COLLATE "C" NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (domain, namespace, event_id),
-    CONSTRAINT dns_errors_outcome_check CHECK (outcome IN ('servfail', 'timeout')),
-    CONSTRAINT dns_errors_sequence_u64 CHECK (
-        sequence >= 0 AND sequence <= 18446744073709551615
-    ),
-    CONSTRAINT dns_errors_status_check CHECK (
-        status_at_event IS NULL OR status_at_event IN ('Unregistered', 'RegisteredParked', 'MailReady', 'Certified')
-    ),
-    CONSTRAINT dns_errors_event_fk FOREIGN KEY (domain, namespace, event_id)
-        REFERENCES events(domain, namespace, event_id) ON DELETE RESTRICT
+    kind TEXT COLLATE "C" NOT NULL,
+    successful BOOLEAN NOT NULL DEFAULT TRUE CHECK (successful),
+    status TEXT COLLATE "C" NOT NULL CHECK (status IN ('Unregistered', 'RegisteredParked', 'MailReady', 'Certified')),
+    applied BOOLEAN NOT NULL,
+    CHECK (kind <> 'ct' OR status = 'Certified'),
+    -- This FK is the raw evidence reference, with exact domain/kind and success shape.
+    FOREIGN KEY (domain, namespace, event_id, kind, successful)
+        REFERENCES events(domain, namespace, event_id, kind, successful) ON DELETE RESTRICT,
+    UNIQUE (domain, namespace, event_id),
+    UNIQUE (domain, namespace, event_id, status, applied)
 );
 
--- Findings: nullable from; only applied history transitions create findings
--- Initial CT certification has from = NULL
+-- Deferred reverse FK ensures every success has exactly one history at commit.
+-- Error rows skip this FK through NULL success_event_id; they cannot have history.
+ALTER TABLE events ADD CONSTRAINT events_require_success_history
+    FOREIGN KEY (domain, namespace, success_event_id)
+    REFERENCES success_history(domain, namespace, event_id)
+    ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED;
+
 CREATE TABLE findings (
-    id BIGSERIAL PRIMARY KEY,
-    domain TEXT COLLATE "C" NOT NULL REFERENCES domains(domain) ON DELETE RESTRICT,
-    from_status TEXT COLLATE "C",                        -- nullable
-    to_status TEXT COLLATE "C" NOT NULL,
+    domain TEXT COLLATE "C" NOT NULL,
     namespace TEXT COLLATE "C" NOT NULL,
     event_id TEXT COLLATE "C" NOT NULL,
+    from_status TEXT COLLATE "C" CHECK (from_status IN ('Unregistered', 'RegisteredParked', 'MailReady', 'Certified')),
+    to_status TEXT COLLATE "C" NOT NULL CHECK (to_status IN ('Unregistered', 'RegisteredParked', 'MailReady', 'Certified')),
+    applied BOOLEAN NOT NULL DEFAULT TRUE CHECK (applied),
     observed_at TEXT COLLATE "C" NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT findings_from_check CHECK (
-        from_status IS NULL OR from_status IN ('Unregistered', 'RegisteredParked', 'MailReady', 'Certified')
-    ),
-    CONSTRAINT findings_to_check CHECK (to_status IN ('Unregistered', 'RegisteredParked', 'MailReady', 'Certified')),
-    CONSTRAINT findings_event_fk FOREIGN KEY (domain, namespace, event_id)
-        REFERENCES events(domain, namespace, event_id) ON DELETE RESTRICT,
-    -- Eligible transitions only (matching DomainStatus::eligible)
-    CONSTRAINT findings_transition_check CHECK (
+    PRIMARY KEY (domain, namespace, event_id),
+    FOREIGN KEY (domain, namespace, event_id, to_status, applied)
+        REFERENCES success_history(domain, namespace, event_id, status, applied) ON DELETE RESTRICT,
+    FOREIGN KEY (domain, namespace, event_id, observed_at)
+        REFERENCES events(domain, namespace, event_id, observed_at) ON DELETE RESTRICT,
+    CHECK (
         (from_status IS NULL AND to_status = 'Certified') OR
-        (from_status = 'Unregistered' AND to_status IN ('RegisteredParked', 'MailReady', 'Certified')) OR
-        (from_status = 'RegisteredParked' AND to_status IN ('MailReady', 'Certified')) OR
-        (from_status = 'MailReady' AND to_status = 'Certified')
+        (from_status IS NOT NULL AND (
+            (from_status = 'Unregistered' AND to_status IN ('RegisteredParked', 'MailReady', 'Certified')) OR
+            (from_status = 'RegisteredParked' AND to_status IN ('MailReady', 'Certified')) OR
+            (from_status = 'MailReady' AND to_status = 'Certified')
+        ))
     )
 );
+CREATE INDEX success_history_domain_order ON success_history(domain, acceptance_order);
 
--- CT evidence log: mirrors ct_facts + events for reference; deduplicated by event identity
-CREATE TABLE ct_evidence_log (
-    domain TEXT COLLATE "C" NOT NULL REFERENCES domains(domain) ON DELETE RESTRICT,
-    namespace TEXT COLLATE "C" NOT NULL,
-    event_id TEXT COLLATE "C" NOT NULL,
-    certificate_id TEXT COLLATE "C" NOT NULL,
-    observed_at TEXT COLLATE "C" NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (domain, namespace, event_id),
-    CONSTRAINT ct_evidence_log_event_fk FOREIGN KEY (domain, namespace, event_id)
-        REFERENCES events(domain, namespace, event_id) ON DELETE RESTRICT
-);
-
--- Helpful indexes for common query patterns
-CREATE INDEX idx_candidates_dns_namespace ON candidates(dns_namespace) WHERE dns_namespace IS NOT NULL;
-CREATE INDEX idx_success_history_domain_order ON success_history(domain, acceptance_order);
-CREATE INDEX idx_findings_domain ON findings(domain);
-CREATE INDEX idx_dns_errors_domain_sequence ON dns_errors(domain, sequence);
-CREATE INDEX idx_events_kind ON events(kind);
-CREATE INDEX idx_dns_facts_outcome ON dns_facts(outcome);
-
--- Restrictive foreign keys: ON DELETE RESTRICT prevents deletion of referenced rows
--- No cascades. Runtime role must not own schema or have DDL privileges.
--- Append-only permissions for event/fact/history/finding tables to be granted separately.
-
--- End of migration 002
+-- Adapter must compare replay before mutation, lock domain, classify via shared core,
+-- update candidate/watermark/CT latch and write findings atomically. No classifier here.
+-- Runtime role must not own schema or receive DDL privileges. Grant SELECT/INSERT
+-- only on immutable domains/streams/events/records/history/findings/brands, sequence
+-- USAGE for acceptance order, and narrow candidate UPDATE privileges separately.
+-- Restrictive FKs are not a substitute for denying runtime UPDATE/DELETE permissions.
+COMMIT;

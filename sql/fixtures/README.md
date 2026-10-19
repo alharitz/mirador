@@ -1,63 +1,72 @@
-# SQL Test Fixtures
+# Standalone fresh-schema draft checks
 
-These fixtures verify the PostgreSQL schema invariants from `POSTGRES_CONTRACT.md`.
+PostgreSQL 16 target. **Not live-verified. Not an additive migration.**
+`001_passive_slice.sql` is incompatible. Do not run 002 after 001, drop existing
+objects, or reset a database to bypass deployment history. Use a new disposable,
+empty database only. Establish deployment history before deployment.
 
-## Files
+From repository root, with PostgreSQL 16 tools installed:
 
-| File | Purpose |
-|------|---------|
-| `01_schema_invariant_tests.sql` | Core schema invariants: identity collision, u64 bounds, C collation, repeated certs, error-before-candidate, duplicate records, many brands, nullable from, shape checks, rollback, restrictive deletes, namespace/sequence uniqueness, empty answers, raw strings |
-| `02_replay_tests.sql` | Exact replay (no-op) vs conflicting replay (fail without mutation) for DNS and CT |
-| `03_transition_finding_tests.sql` | State transitions and findings: baseline silent, CT initial finding, eligible transitions only, stale/error no findings |
-| `04_ct_dns_behavior_tests.sql` | CT monotonic, CT wins with NXDOMAIN, DNS watermark, CT namespaces independent |
-
-## Running Tests
-
-Requires PostgreSQL 16. No live runtime available in current environment.
-
-```bash
-# Create test database
-createdb mirador_test
-
-# Run migrations
-psql -d mirador_test -f ../../migrations/001_passive_slice.sql
-psql -d mirador_test -f ../../migrations/002_passive_schema.sql
-
-# Run test fixtures (each runs in its own transaction, rolls back on constraint violation)
-psql -d mirador_test -f 01_schema_invariant_tests.sql
-psql -d mirador_test -f 02_replay_tests.sql
-psql -d mirador_test -f 03_transition_finding_tests.sql
-psql -d mirador_test -f 04_ct_dns_behavior_tests.sql
+```sh
+createdb mirador_schema_test
+psql -X -v ON_ERROR_STOP=1 -d mirador_schema_test -f migrations/002_passive_schema.sql
+psql -X -v ON_ERROR_STOP=1 -d mirador_schema_test -f sql/fixtures/01_schema_invariant_tests.sql
+psql -X -v ON_ERROR_STOP=1 -d mirador_schema_test -f sql/fixtures/02_replay_tests.sql
+psql -X -v ON_ERROR_STOP=1 -d mirador_schema_test -f sql/fixtures/03_transition_finding_tests.sql
+psql -X -v ON_ERROR_STOP=1 -d mirador_schema_test -f sql/fixtures/04_ct_dns_behavior_tests.sql
 ```
 
-## Expected Behavior
+Every fixture includes `helpers.sql` relative to itself, asserts results, checks
+expected SQLSTATE for negative cases, forces deferred constraints, then rolls
+back all test rows/functions. Unexpected success or wrong failure aborts with
+nonzero psql exit status. No errors are intentionally left uncaught.
 
-- Each test uses `BEGIN` / `ROLLBACK` for constraint violations
-- Valid operations use `COMMIT`
-- Output shows `ROLLBACK` for expected failures, `COMMIT` for successes
-- Final `SELECT` statements verify state
+## Schema shape
 
-## Contract Coverage
+`events` is shared identity registry **and canonical typed payload**, replacing
+separate `dns_facts`, `ct_facts`, and `dns_errors` tables from the failed draft.
+This avoids orphan/missing/mismatched evidence and JSONB replay projections.
+`dns_records` retains ordered typed records and duplicates. History references
+raw evidence through the exact event key; no redundant JSON reference is used.
+Source timestamps remain exact opaque text, including empty strings permitted
+by core. MX/NS payload strings remain raw, including empty strings. Domains,
+namespaces, event IDs, brand names, and certificate IDs cannot be empty.
 
-These fixtures cover all required checks from `POSTGRES_CONTRACT.md` § "Planned verification":
+Composite FKs enforce DNS stream reservation before candidates, answer-only
+records, history kind/success, and finding applied/status/timestamp linkage.
+A deferred reverse FK requires every successful event (including NXDOMAIN and
+stale DNS success) to have exactly one history row by transaction completion.
+Errors cannot have success history. Insert event before history in one transaction.
+No triggers, CHECK subqueries, cascades, or destructive statements are used.
 
-- [x] DNS/CT identity cross-kind collision
-- [x] Full u64 maximum, negative and overflow rejection
-- [x] Case-distinct source identities/payloads
-- [x] Repeated certificate IDs as distinct events
-- [x] Error-before-candidate
-- [x] Ordered duplicate DNS records
-- [x] Many brands
-- [x] Initial CT nullable `from`
-- [x] Schema shape checks (mixed fields, invalid variants, out-of-range, non-IPv4 A, records on non-answer, mismatched domains/kinds)
-- [x] Transaction rollback
-- [x] Restrictive delete behavior
+## Fixture coverage (defined, not runtime-proven)
 
-Plus additional behavioral tests:
-- Exact replay no-op / conflicting replay fails
-- DNS baseline silent / CT initial finding
-- Eligible transitions only (per `DomainStatus::eligible`)
-- Stale/error observations emit no findings
-- CT monotonic / CT wins with NXDOMAIN
-- DNS watermark advances only on applied success
-- CT namespaces independent of DNS namespace
+- `01`: explicit u64 bounds, canonical host limits, nonempty identities, error
+  before candidate, namespace/sequence reservation, ordered duplicate records,
+  raw strings, empty answers, IPv4 host-only A, typed shape, MX bounds,
+  non-answer rejection, many brands, rollback, restrictive deletes.
+- `02`: cross-kind collision in both directions using the **same namespace**,
+  case-distinct identities/certificates, repeated certificates as separate events,
+  immutable envelope comparison prerequisites, C text collation.
+- `03`: initial nullable finding from, applied/status/source-time linkage,
+  invalid transitions, history errors/kinds/status, missing-history rejection,
+  database-generated unique acceptance order.
+- `04`: mixed/invalid DNS/CT payloads, nullable error acceptance status,
+  independent CT namespaces, domain/kind mismatch, DNS certificate flag isolation.
+
+## Not implemented or proven here
+
+Direct duplicate INSERTs reject both exact and conflicting replay. These fixtures
+do **not** claim adapter replay no-op semantics. Future adapter must lock domain,
+compare every replay field and ordered record before mutation, validate input,
+reuse core classification/eligibility, and atomically update candidate watermark,
+CT latch, history and findings. Schema does not run a duplicate classifier or
+infer prior state. Acceptance sequence is allocated by database, not source time;
+per-domain locking is needed for concurrent acceptance ordering.
+
+Runtime role creation/grants remain a deployment gate. Runtime must not own
+schema or have DDL privileges; deny UPDATE/DELETE on immutable observations and
+grant only narrow candidate mutation plus required sequence access. Restrictive
+FKs alone do not make unreferenced rows append-only. TLS is required before
+nonlocal access. No live PostgreSQL execution, role, restart, replay, or
+concurrency verification is claimed.
