@@ -21,7 +21,7 @@ CREATE TABLE candidates (
     domain TEXT COLLATE "C" PRIMARY KEY REFERENCES domains ON DELETE RESTRICT,
     status TEXT COLLATE "C" CHECK (status IN ('Unregistered', 'RegisteredParked', 'MailReady', 'Certified')),
     dns_namespace TEXT COLLATE "C",
-    dns_sequence NUMERIC(20,0) CHECK (dns_sequence >= 0 AND dns_sequence <= 18446744073709551615),
+    dns_sequence NUMERIC CHECK (dns_sequence IS NULL OR (dns_sequence = trunc(dns_sequence) AND dns_sequence >= 0 AND dns_sequence <= 18446744073709551615)),
     ct_observed BOOLEAN NOT NULL DEFAULT FALSE,
     CHECK (dns_sequence IS NULL OR dns_namespace IS NOT NULL),
     FOREIGN KEY (domain, dns_namespace) REFERENCES dns_streams(domain, namespace) ON DELETE RESTRICT
@@ -45,7 +45,7 @@ CREATE TABLE events (
     event_id TEXT COLLATE "C" NOT NULL CHECK (event_id <> ''),
     kind TEXT COLLATE "C" NOT NULL CHECK (kind IN ('dns', 'ct')),
     observed_at TEXT COLLATE "C" NOT NULL,
-    sequence NUMERIC(20,0) CHECK (sequence >= 0 AND sequence <= 18446744073709551615),
+    sequence NUMERIC CHECK (sequence IS NULL OR (sequence = trunc(sequence) AND sequence >= 0 AND sequence <= 18446744073709551615)),
     outcome TEXT COLLATE "C",
     has_certificate BOOLEAN,
     certificate_id TEXT COLLATE "C",

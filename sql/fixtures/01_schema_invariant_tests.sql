@@ -8,6 +8,9 @@ SELECT pg_temp.reject($q$SELECT pg_temp.dns('bounds.test', 'negative', -1)$q$, '
 SELECT pg_temp.reject($q$SELECT pg_temp.dns('bounds.test', 'overflow', 18446744073709551616)$q$, '23514');
 SELECT pg_temp.reject($q$INSERT INTO candidates(domain, dns_sequence) VALUES ('bounds.test', -1)$q$, '23514');
 SELECT pg_temp.reject($q$INSERT INTO candidates(domain, dns_sequence) VALUES ('bounds.test', 18446744073709551616)$q$, '23514');
+SELECT pg_temp.reject($q$INSERT INTO candidates(domain, dns_sequence) VALUES ('bounds.test', 1.5)$q$, '23514');
+SELECT pg_temp.reject($q$INSERT INTO events(domain,namespace,event_id,kind,observed_at,sequence,outcome)
+    VALUES ('bounds.test','dns','fractional','dns','',1.5,'timeout')$q$, '23514');
 SELECT pg_temp.reject($q$INSERT INTO domains VALUES ('Upper.test')$q$, '23514');
 SELECT pg_temp.reject($q$INSERT INTO domains VALUES ('')$q$, '23514');
 SELECT pg_temp.reject($q$INSERT INTO domains VALUES (repeat('a.', 126) || 'aa')$q$, '23514');
