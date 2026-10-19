@@ -16,13 +16,14 @@ BEGIN
 END $$;
 
 CREATE FUNCTION pg_temp.dns(d TEXT, e TEXT, s NUMERIC, o TEXT DEFAULT 'answer',
-    st TEXT DEFAULT 'RegisteredParked', a BOOLEAN DEFAULT TRUE) RETURNS VOID LANGUAGE plpgsql AS $$
+    st TEXT DEFAULT 'RegisteredParked', a BOOLEAN DEFAULT TRUE, records BIGINT DEFAULT 0)
+RETURNS VOID LANGUAGE plpgsql AS $$
 BEGIN
     INSERT INTO domains VALUES (d) ON CONFLICT DO NOTHING;
     INSERT INTO dns_streams VALUES (d, 'dns') ON CONFLICT DO NOTHING;
-    INSERT INTO events(domain, namespace, event_id, kind, observed_at, sequence, outcome, has_certificate)
+    INSERT INTO events(domain, namespace, event_id, kind, observed_at, sequence, outcome, has_certificate, dns_record_count)
         VALUES (d, 'dns', e, 'dns', 'opaque source time', s, o,
-            CASE WHEN o IN ('answer', 'nxdomain') THEN FALSE END);
+            CASE WHEN o IN ('answer', 'nxdomain') THEN FALSE END, records);
     IF o IN ('answer', 'nxdomain') THEN
         INSERT INTO success_history(domain, namespace, event_id, kind, status, applied)
             VALUES (d, 'dns', e, 'dns', st, a);
