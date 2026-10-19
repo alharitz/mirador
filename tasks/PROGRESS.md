@@ -97,7 +97,9 @@
 - Planning documentation was reviewed against Task 002 and core; Markdown whitespace/link checks were recorded for that earlier update.
 - PostgreSQL, Docker, and `psql` were unavailable during recorded schema work. Fixtures exist but live execution remains pending; no migration execution or adapter verification is claimed.
 - Reviewed documentation commit `ce8410a` is integrated into this schema branch; schema and fixture files remain unchanged. Historical Cargo results above are not results of this update.
-- Added `.github/workflows/postgres-schema.yml`: push/PR verification uses a disposable PostgreSQL 16 service, standalone 002, then all four fixtures in README order and separate fail-fast psql sessions. No 001, existing database, repository secrets, SQL/source changes, or third-party test dependency. Live success remains pending until a run completes.
+- Added `.github/workflows/postgres-schema.yml`: push/PR verification uses a disposable PostgreSQL 16 service, standalone 002, then all four fixtures in README order and separate fail-fast psql sessions. No 001, existing database, repository secrets, SQL/source changes, or third-party test dependency. Live success remains pending until a successful run completes.
+- Workflow static assertions passed for fixture order against README, existing paths, separate sessions, fixture rollback/helpers, and security guards; `cargo check` and staged `git diff --check` passed.
+- CI attempts for `e724b57` completed with infrastructure failure before any steps ran: [run 39291507845](https://github.com/alharitz/mirador/actions/runs/39291507845) and [run 39291507440](https://github.com/alharitz/mirador/actions/runs/39291507440). GitHub annotation: `The job was not started because your account is locked due to a billing issue.` No SQL executed; resolve account billing and rerun before claiming live verification.
 
 ### Remaining Work
 1. Establish deployment history before any deployment/replacement; schema branch remains unmerged and not production-ready.
