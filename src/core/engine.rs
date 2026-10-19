@@ -181,18 +181,11 @@ impl Store {
             observed_at: observed_at.to_owned(),
         });
         let candidate = self.candidate(&domain);
-        let current = candidate
-            .status
-            .clone()
-            .unwrap_or(DomainStatus::Unregistered);
-        let mut next = DomainStatus::classify_observation(
-            current,
-            false,
-            ProbeResult::Success(observation.clone()),
+        let next = classify_dns(
+            candidate.status.clone(),
+            candidate.ct_observed,
+            &observation,
         );
-        if candidate.ct_observed {
-            next = DomainStatus::Certified;
-        }
         if stale {
             self.history.push(StateHistory {
                 applied: false,
@@ -342,7 +335,27 @@ fn source_event(domain: &str, namespace: &str, event_id: &str) -> Result<SourceE
     })
 }
 
-fn eligible(from: Option<DomainStatus>, to: &DomainStatus) -> bool {
+/// Classifies DNS evidence; only the independent CT latch can override DNS status.
+/// Caller must validate the observation before accepting it as a successful event.
+pub(crate) fn classify_dns(
+    prior: Option<DomainStatus>,
+    ct_observed: bool,
+    observation: &DnsObservation,
+) -> DomainStatus {
+    let next = DomainStatus::classify_observation(
+        prior.unwrap_or(DomainStatus::Unregistered),
+        false,
+        ProbeResult::Success(observation.clone()),
+    );
+    if ct_observed {
+        DomainStatus::Certified
+    } else {
+        next
+    }
+}
+
+/// Finding eligibility for applied successful events only; caller excludes errors and stale events.
+pub(crate) fn eligible(from: Option<DomainStatus>, to: &DomainStatus) -> bool {
     matches!(
         (from, to),
         (None, DomainStatus::Certified)
@@ -411,6 +424,104 @@ mod tests {
             .unwrap();
         observe(&mut store, "error", 3, ProbeResult::Timeout);
         store
+    }
+
+    #[test]
+    fn eligibility_matrix_all_prior_and_next_statuses() {
+        use DomainStatus::*;
+        let statuses = [Unregistered, RegisteredParked, MailReady, Certified];
+        for (from, expected) in [
+            (None, [false, false, false, true]),
+            (Some(Unregistered), [false, true, true, true]),
+            (Some(RegisteredParked), [false, false, true, true]),
+            (Some(MailReady), [false, false, false, true]),
+            (Some(Certified), [false, false, false, false]),
+        ] {
+            for (to, expected) in statuses.iter().zip(expected) {
+                assert_eq!(eligible(from.clone(), to), expected, "{from:?} -> {to:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn dns_classification_ignores_certificate_payload_and_ct_overrides_even_nxdomain() {
+        use DomainStatus::*;
+        for prior in [
+            None,
+            Some(Unregistered),
+            Some(RegisteredParked),
+            Some(MailReady),
+            Some(Certified),
+        ] {
+            for (outcome, expected) in [
+                (DnsProbeOutcome::NxDomain, Unregistered),
+                (DnsProbeOutcome::Answer(vec![]), RegisteredParked),
+                (
+                    DnsProbeOutcome::Answer(vec![DnsRecord::NS("ns.test".into())]),
+                    RegisteredParked,
+                ),
+                (
+                    DnsProbeOutcome::Answer(vec![DnsRecord::MX(10, "mx.test".into())]),
+                    MailReady,
+                ),
+            ] {
+                for has_certificate in [false, true] {
+                    let observation = DnsObservation {
+                        probe_outcome: outcome.clone(),
+                        has_certificate,
+                    };
+                    assert_eq!(classify_dns(prior.clone(), false, &observation), expected);
+                    assert_eq!(classify_dns(prior.clone(), true, &observation), Certified);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn empty_dns_answer_is_silent_parked_baseline_without_ct_latch() {
+        let mut store = Store::default();
+        let observation = DnsObservation {
+            probe_outcome: DnsProbeOutcome::Answer(vec![]),
+            has_certificate: true,
+        };
+        observe(
+            &mut store,
+            "empty",
+            1,
+            ProbeResult::Success(observation.clone()),
+        );
+        assert_eq!(
+            store.candidates()[DOMAIN].status,
+            Some(DomainStatus::RegisteredParked)
+        );
+        assert!(!store.candidates()[DOMAIN].ct_observed);
+        assert_eq!(
+            store.history()[0].raw_evidence,
+            RawEvidence::Dns(observation)
+        );
+        assert!(store.history()[0].applied);
+        assert!(store.findings().is_empty());
+    }
+
+    #[test]
+    fn stale_dns_history_uses_ct_latch_without_mutating_candidate_or_findings() {
+        let mut store = accepted_store();
+        let candidate = store.candidates()[DOMAIN].clone();
+        let findings = store.findings().to_vec();
+        observe(&mut store, "stale", 0, success(DnsProbeOutcome::NxDomain));
+        assert_eq!(store.candidates()[DOMAIN], candidate);
+        assert_eq!(store.findings(), findings);
+        let history = store.history().last().unwrap();
+        assert_eq!(history.status, DomainStatus::Certified);
+        assert!(!history.applied);
+        assert_eq!(
+            history.raw_evidence,
+            RawEvidence::Dns(DnsObservation {
+                probe_outcome: DnsProbeOutcome::NxDomain,
+                has_certificate: false,
+            })
+        );
+        assert_eq!(store.successful_snapshots().last().unwrap().sequence, 0);
     }
 
     #[test]
