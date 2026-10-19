@@ -3,6 +3,8 @@
 Working notes that don't belong in README or the architecture docs -- decisions
 made along the way, measurements, things learned by doing.
 
+Catatan: Implementasi saat ini menggunakan Rust, mengganti tumpukan Go aslinya. dnstwist tetap sebagai alat Python eksternal yang dipin. Batas fase 1 tetap pasif: tidak ada HTTP ke domain kandidat.
+
 ## Test domain
 
 `bca.co.id` (Bank Central Asia) is the one real domain used throughout

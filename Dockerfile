@@ -1,22 +1,24 @@
 # syntax=docker/dockerfile:1
 
 # ---------- builder stage ----------
-FROM golang:1.27-alpine AS builder
+FROM rust:1-slim AS builder
 
 WORKDIR /src
 
-# Dependencies are fetched before the source is copied in. As long as
-# go.mod/go.sum don't change, this layer stays cached -- a rebuild after
-# editing code takes seconds instead of waiting on a re-download.
-COPY go.mod go.sum* ./
-RUN go mod download
+# Copy Cargo manifest and lock file to cache dependencies
+COPY Cargo.toml Cargo.lock ./
+# Create a dummy src directory to fetch dependencies
+RUN mkdir src && echo "fn main() {}" > src/main.rs
+# Build dependencies to cache them
+RUN cargo build --release
+# Remove the dummy app
+RUN rm -rf src target/release/deps/mirador*
 
+# Copy the actual source code
 COPY . .
 
-# CGO is disabled so the binary is static. That's what lets a build produced
-# on alpine (musl) run as-is on the Debian (glibc) runtime below.
-ENV CGO_ENABLED=0
-RUN go build -trimpath -o /out/mirador ./cmd/mirador
+# Build the actual application in release mode
+RUN cargo build --release
 
 # ---------- runtime stage ----------
 FROM python:3.12-slim AS runtime
@@ -30,7 +32,8 @@ RUN pip install --no-cache-dir dnstwist==20250130
 # run as root.
 RUN useradd --create-home --uid 10001 mirador
 
-COPY --from=builder /out/mirador /usr/local/bin/mirador
+# Copy the binary from the builder stage
+COPY --from=builder /src/target/release/mirador /usr/local/bin/mirador
 
 WORKDIR /app
 RUN mkdir -p /app/out && chown -R mirador:mirador /app
