@@ -2,7 +2,7 @@
 
 ## Status and boundaries
 
-This is the schema-first contract for the next durable-storage milestone. It records approved invariants; it is not executable SQL and does not claim implementation or production readiness. PostgreSQL 16 is the target. No PostgreSQL, Docker, or `psql` runtime is available for this milestone.
+This is the schema-first contract for the next durable-storage milestone. It records approved invariants; it is not executable SQL. PostgreSQL 16 is the target. A standalone fresh-schema draft (`migrations/002_passive_schema.sql`) and invariant fixtures (`sql/fixtures/`) exist on `alharitz/task003-schema` through commit `8b1747f`. That branch is not merged into `main` or this documentation branch, is not live-verified, and is not production-ready. Task 003 remains incomplete; no PostgreSQL adapter is implemented. PostgreSQL, Docker, and `psql` were unavailable during the recorded schema work; live verification remains pending.
 
 `migrations/001_passive_slice.sql` is an unvalidated prototype and is incompatible with this contract. Establish deployment history before replacing it. Never use a destructive reset to bypass history.
 
@@ -13,7 +13,7 @@ The later adapter must use a synchronous PostgreSQL driver proposal, not add an 
 - `domains` is the persistent lock anchor. `candidates` is separate and retains current applied state: association, successful DNS, or CT can create a candidate; error-only DNS cannot. Domain identity, namespace/sequence reservation, error evidence, and locking must work before a candidate exists.
 - Every source event has exact shared identity `(domain, namespace, event_id)`. DNS and CT use the same identity space; a cross-kind collision is a conflicting replay, not a second event.
 - Every accepted event retains its full immutable replay envelope, including kind and exact source timestamp string. DNS retains sequence, success/error variant, outcome, ordered typed records, and `has_certificate` when present; CT retains certificate ID. Errors also retain nullable status at acceptance. Comparison includes every field, not a lossy hash or projection. Identity and immutable text columns must use deterministic `COLLATE "C"` (or byte-exact storage); comparison must be exact and case-sensitive, not locale-normalized. Do not coerce source timestamps into database time types as the canonical value.
-- DNS sequence is an unsigned-64-bit value represented with PostgreSQL `numeric(20,0)` plus an explicit `CHECK (sequence >= 0 AND sequence <= 18446744073709551615)`; the column type alone does not enforce u64 bounds. One DNS namespace is allowed per domain. `(domain, sequence)` is unique across errors, stale successes, and applied successes.
+- DNS sequence is an unsigned-64-bit value represented with unconstrained PostgreSQL `NUMERIC`, not `NUMERIC(20,0)`, which can round fractional inputs before a check. Both `events.sequence` and `candidates.dns_sequence` require exact integral values and u64 bounds: `CHECK (sequence IS NULL OR (sequence = trunc(sequence) AND sequence >= 0 AND sequence <= 18446744073709551615))` (substitute `dns_sequence` for the candidate column). Event shape checks require a sequence for DNS and forbid it for CT; candidate watermark may be NULL. One DNS namespace is allowed per domain. `(domain, sequence)` is unique across errors, stale successes, and applied successes.
 - DNS records are stored in input order with ordinals; duplicate records remain distinct. DNS `has_certificate` is source payload only and never sets CT observed state.
 - CT deduplicates by event identity, not certificate ID. Each successful event has exactly one success history row with raw evidence reference, classified status, applied flag, and database acceptance order independent of source time/sequence. Errors have no success history. Reconstruct per-domain history in acceptance order; gaps in allocated order values are harmless.
 - Findings have nullable `from`; only applied history transitions can create findings. Initial CT certification therefore has `from = NULL`. One event can produce at most its contractually accepted finding/history result.
@@ -38,15 +38,15 @@ Schema shape checks must reject mixed DNS/CT fields, invalid status/outcome vari
 
 ## Planned verification
 
-Exact schema tests must cover: DNS/CT identity cross-kind collision; full u64 maximum, negative and overflow rejection; case-distinct source identities/payloads; repeated certificate IDs as distinct events; error-before-candidate; ordered duplicate DNS records; many brands; initial CT nullable `from`; shape checks; transaction rollback; and restrictive delete behavior.
+Exact schema tests must cover: DNS/CT identity cross-kind collision; full u64 maximum, negative, fractional and overflow rejection; case-distinct source identities/payloads; repeated certificate IDs as distinct events; error-before-candidate; ordered duplicate DNS records; many brands; initial CT nullable `from`; shape checks; transaction rollback; and restrictive delete behavior.
 
 Source timestamps are opaque strings: they do not establish chronological order, timezone validity, or duration and cannot drive watermark or acceptance ordering. Canonical lowercase ASCII hostname limits, nonempty namespace/event ID, no homemade IDNA, and passive-only operation remain unchanged. Reuse `DomainStatus::classify_observation` and `eligible` semantics through a future shared helper: empty DNS answer is `RegisteredParked`, DNS baseline is silent, initial CT emits `Certified`, and only approved upward transitions emit findings. CT wins even with NXDOMAIN, but proves neither validity nor resolution. `ActiveReserved` must not be introduced. NS/IP-change and same-status MX alerts remain deferred.
 
 ## Staged work
 
-1. **Task 003 planning gate:** approve this contract and deployment-history approach.
-2. **Schema draft plus tests:** create the PostgreSQL 16 schema and exact invariant tests only after the gate; no adapter yet.
-3. **Live SQL verification:** run schema/test checks when PostgreSQL, Docker, or `psql` is available.
-4. **Adapter:** propose and implement synchronous driver integration, then restart/replay/concurrency tests.
+1. **Planning/deployment gate:** contract recorded; establish deployment history before any deployment or replacement of the incompatible prototype.
+2. **Schema draft plus tests:** standalone PostgreSQL 16 draft and fixtures exist on the unmerged schema branch through `8b1747f`; no adapter yet. The draft is not an additive migration and must never run after `001_passive_slice.sql`. Use only a new disposable, empty database for verification; never reset existing data to bypass deployment history.
+3. **Live SQL verification (pending):** run schema and all fixtures on PostgreSQL 16. Fixture definitions, including fractional-input rejection added in `8b1747f`, are not proof of runtime success.
+4. **Adapter/deployment gates (pending):** propose synchronous driver integration, implement shared classifier/eligibility reuse and transaction semantics, then verify restart/replay/concurrency behavior. Runtime-role grants and TLS before nonlocal access remain required; restrictive foreign keys alone do not establish append-only permissions.
 
-No success claim or production-readiness claim is made here. Task 003 planning is ready; implementation remains pending.
+Task 003 is not complete. The schema branch is unmerged and not production-ready; no live SQL success or adapter behavior is claimed.
