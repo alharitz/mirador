@@ -15,7 +15,7 @@
 
 ## Milestone 003: PostgreSQL Schema Contract and Plan
 
-**Status**: Schema draft on unmerged branch; incomplete. Original planning was documentation-only; standalone schema and fixtures now exist on `alharitz/task003-schema` through `8b1747f`, not merged into `main` or this documentation branch. No adapter or production readiness. See [Task 003](003-postgres-schema.md) and [PostgreSQL contract](../docs/POSTGRES_CONTRACT.md).
+**Status**: Schema draft on unmerged branch; incomplete. Original planning was documentation-only; standalone schema and fixtures now exist on `alharitz/task003-schema` through `8b1747f`, present in this schema branch but not merged into `main`. No adapter or production readiness. See [Task 003](003-postgres-schema.md) and [PostgreSQL contract](../docs/POSTGRES_CONTRACT.md).
 
 Sequence columns use unconstrained `NUMERIC` with exact integral and u64 bounds checks, not rounding `NUMERIC(20,0)`. PostgreSQL 16 live schema/fixture verification remains pending; PostgreSQL, Docker, and `psql` were unavailable during recorded work. Establish deployment history before deployment; 002 is a standalone fresh-schema draft, never additive after 001. Remaining gates: live SQL checks, synchronous driver/adapter with shared core semantics and restart/replay/concurrency tests, runtime-role grants, and TLS before nonlocal access.
 

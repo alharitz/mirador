@@ -81,7 +81,7 @@
 - JSONL remains deferred pending a maintained serializer; NS/IP-change and same-status MX alerts remain deferred pending semantics.
 
 ## Milestone 003: PostgreSQL Schema Contract and Plan
-**Status**: Schema draft on unmerged branch; Task 003 incomplete (2026-10-19). Original planning was documentation-only. Subsequent `alharitz/task003-schema` work through `8b1747f` contains standalone schema and fixtures, not merged into `main` or this documentation branch. Live PostgreSQL verification and adapter remain pending; branch is not production-ready.
+**Status**: Schema draft on unmerged branch; Task 003 incomplete (2026-10-19). Original planning was documentation-only. Subsequent `alharitz/task003-schema` work through `8b1747f` contains standalone schema and fixtures, present in this schema branch but not merged into `main`. Live PostgreSQL verification and adapter remain pending; branch is not production-ready.
 
 ### Planning Completed
 - Contract recorded in `docs/POSTGRES_CONTRACT.md`; staged tasks in `tasks/003-postgres-schema.md`.
@@ -96,7 +96,8 @@
 ### Checks and Limits
 - Planning documentation was reviewed against Task 002 and core; Markdown whitespace/link checks were recorded for that earlier update.
 - PostgreSQL, Docker, and `psql` were unavailable during recorded schema work. Fixtures exist but live execution remains pending; no migration execution or adapter verification is claimed.
-- This reconciliation reviewed schema commit `8b1747f` and fixture documentation; only documentation changed. Historical Cargo results above are not results of this update.
+- Reviewed documentation commit `ce8410a` is integrated into this schema branch; schema and fixture files remain unchanged. Historical Cargo results above are not results of this update.
+- Added `.github/workflows/postgres-schema.yml`: push/PR verification uses a disposable PostgreSQL 16 service, standalone 002, then all four fixtures in README order and separate fail-fast psql sessions. No 001, existing database, repository secrets, SQL/source changes, or third-party test dependency. Live success remains pending until a run completes.
 
 ### Remaining Work
 1. Establish deployment history before any deployment/replacement; schema branch remains unmerged and not production-ready.

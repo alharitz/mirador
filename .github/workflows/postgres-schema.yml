@@ -1,0 +1,48 @@
+name: PostgreSQL schema
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  schema:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: mirador_schema_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: disposable-test-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d mirador_schema_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: disposable-test-only
+      PGDATABASE: mirador_schema_test
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          persist-credentials: false
+      - name: Install PostgreSQL 16 client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client-16
+      - name: Verify standalone schema and fixtures in separate sessions
+        run: |
+          psql -X -v ON_ERROR_STOP=1 -f migrations/002_passive_schema.sql
+          psql -X -v ON_ERROR_STOP=1 -f sql/fixtures/01_schema_invariant_tests.sql
+          psql -X -v ON_ERROR_STOP=1 -f sql/fixtures/02_replay_tests.sql
+          psql -X -v ON_ERROR_STOP=1 -f sql/fixtures/03_transition_finding_tests.sql
+          psql -X -v ON_ERROR_STOP=1 -f sql/fixtures/04_ct_dns_behavior_tests.sql

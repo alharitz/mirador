@@ -2,7 +2,7 @@
 
 ## Status and boundaries
 
-This is the schema-first contract for the next durable-storage milestone. It records approved invariants; it is not executable SQL. PostgreSQL 16 is the target. A standalone fresh-schema draft (`migrations/002_passive_schema.sql`) and invariant fixtures (`sql/fixtures/`) exist on `alharitz/task003-schema` through commit `8b1747f`. That branch is not merged into `main` or this documentation branch, is not live-verified, and is not production-ready. Task 003 remains incomplete; no PostgreSQL adapter is implemented. PostgreSQL, Docker, and `psql` were unavailable during the recorded schema work; live verification remains pending.
+This is the schema-first contract for the next durable-storage milestone. It records approved invariants; it is not executable SQL. PostgreSQL 16 is the target. A standalone fresh-schema draft (`migrations/002_passive_schema.sql`) and invariant fixtures (`sql/fixtures/`) exist on `alharitz/task003-schema` through commit `8b1747f`. That draft is present in this schema branch but not merged into `main`, is not live-verified, and is not production-ready. Task 003 remains incomplete; no PostgreSQL adapter is implemented. PostgreSQL, Docker, and `psql` were unavailable during the recorded schema work; live verification remains pending.
 
 `migrations/001_passive_slice.sql` is an unvalidated prototype and is incompatible with this contract. Establish deployment history before replacing it. Never use a destructive reset to bypass history.
 

@@ -2,7 +2,7 @@
 
 ## Status
 
-**Schema draft on unmerged branch; Task 003 incomplete.** Planning was documentation-only. Subsequent schema work on `alharitz/task003-schema` through `8b1747f` adds standalone `migrations/002_passive_schema.sql` and `sql/fixtures/`; these are not merged into `main` or this documentation branch. Live PostgreSQL verification, adapter implementation, and deployment gates remain pending. Schema branch is not production-ready.
+**Schema draft on unmerged branch; Task 003 incomplete.** Planning was documentation-only. Subsequent schema work on `alharitz/task003-schema` through `8b1747f` adds standalone `migrations/002_passive_schema.sql` and `sql/fixtures/`; these are present in this schema branch but not merged into `main`. Live PostgreSQL verification, adapter implementation, and deployment gates remain pending. Schema branch is not production-ready.
 
 ## Goal
 
@@ -34,9 +34,9 @@ Schema tests must cover identity cross-kind collision, maximum u64 and negative/
 
 1. Gate: approve contract and establish migration/deployment history. Existing `migrations/001_passive_slice.sql` is incompatible and unvalidated; never destructively reset it.
 2. Draft PostgreSQL 16 schema and invariant tests: present only on unmerged schema branch through `8b1747f`. Draft is standalone, not additive; never run 002 after 001 or reset existing data. Verify only in a new disposable, empty database.
-3. Run live PostgreSQL 16 schema/fixture verification when tooling is available; pending.
+3. Run live PostgreSQL 16 schema/fixture verification; pending a completed successful CI run. [PostgreSQL schema workflow](../.github/workflows/postgres-schema.yml) runs on push and pull request with a disposable PostgreSQL 16 service, standalone 002, and all four fixtures in README order using separate `psql -X -v ON_ERROR_STOP=1` sessions. It never runs 001 or accesses an existing database; no repository secrets are used.
 4. Propose and implement synchronous adapter, then restart/replay/concurrency tests. Establish runtime-role grants and TLS before nonlocal access; pending.
 
 ## Non-goals and limits
 
-Schema draft does not replace deployed migrations or implement adapter behavior, source/core changes, dependencies, live sources, HTTP probing, CLI/API/UI, or production readiness. This reconciliation changes documentation only. PostgreSQL, Docker, and `psql` were unavailable during recorded schema work; no live SQL success is claimed. Direct duplicate inserts reject both exact and conflicting replay; adapter replay no-op semantics remain unimplemented.
+Schema draft does not replace deployed migrations or implement adapter behavior, source/core changes, dependencies, live sources, HTTP probing, CLI/API/UI, or production readiness. Reviewed documentation commit `ce8410a` is integrated into this schema branch. PostgreSQL, Docker, and `psql` were unavailable during recorded schema work; no live SQL success is claimed. Direct duplicate inserts reject both exact and conflicting replay; adapter replay no-op semantics remain unimplemented.
