@@ -44,7 +44,7 @@
 - Docker build not verified (Docker unavailable in current environment)
 
 ### Remaining Work
-- Task 002 in-memory passive prototype is verified (2026-10-19; see below). Task 003 schema planning is ready; schema and adapter implementation remain pending.
+- Task 002 in-memory passive prototype is verified (2026-10-19; see below). Task 003 schema draft exists on unmerged `alharitz/task003-schema` through `8b1747f`; live PostgreSQL verification and adapter remain pending. Task 003 is incomplete and not production-ready.
 - Existing `migrations/001_passive_slice.sql` is an unvalidated prototype incompatible with the approved contract; establish deployment history before replacement and never use a destructive reset.
 - Docker build and compose runtime verification when available.
 - Phase-1 release gates remain pending; local foundation checks are not release completion.
@@ -75,26 +75,31 @@
 - Task 002 acceptance checks complete, including explicit JSONL deferral: `JSONL output is unsupported without a maintained serializer`.
 
 ### Boundaries and Remaining Work
-- Task 003 schema planning is ready; implementation and adapter remain pending. Existing `migrations/001_passive_slice.sql` is incompatible and unvalidated; do not run it or replace it before establishing deployment history.
+- Task 003 schema draft and fixtures exist on the unmerged schema branch through `8b1747f`; live SQL verification and adapter remain pending. Existing `migrations/001_passive_slice.sql` is incompatible and unvalidated; do not run it or replace it before establishing deployment history.
 - No live sources, CLI wiring, API, or UI implemented for this prototype. Docker build and compose runtime remain unverified; phase-1 release gates remain pending.
 - Limits: canonical lowercase ASCII hostnames only, timestamps retained as source strings, unbounded volatile memory.
 - JSONL remains deferred pending a maintained serializer; NS/IP-change and same-status MX alerts remain deferred pending semantics.
 
 ## Milestone 003: PostgreSQL Schema Contract and Plan
-**Status**: Planning ready; implementation pending (2026-10-19). Documentation-only; no executable SQL, migration/source changes, or dependencies added.
+**Status**: Schema draft on unmerged branch; Task 003 incomplete (2026-10-19). Original planning was documentation-only. Subsequent `alharitz/task003-schema` work through `8b1747f` contains standalone schema and fixtures, not merged into `main` or this documentation branch. Live PostgreSQL verification and adapter remain pending; branch is not production-ready.
 
 ### Planning Completed
 - Contract recorded in `docs/POSTGRES_CONTRACT.md`; staged tasks in `tasks/003-postgres-schema.md`.
 - Schema-first before adapter, PostgreSQL 16 target; shared identity, full immutable evidence, domain locks separate from candidates, bounded u64 sequences, ordered duplicate records, monotonic CT, atomic state/history/findings, append-only runtime permissions, and restrictive foreign keys specified.
-- Existing SQL remains incompatible. Establish deployment history before replacement; never use a destructive reset.
+- Existing `migrations/001_passive_slice.sql` remains incompatible. Establish deployment history before replacement; never use a destructive reset.
+
+### Schema Draft Recorded
+- Schema branch contains standalone `migrations/002_passive_schema.sql` and `sql/fixtures/`; 002 is not an additive migration and must never run after 001. Verification requires a new disposable, empty database.
+- Commit `8b1747f` replaces `NUMERIC(20,0)` sequence columns with unconstrained `NUMERIC`, exact `sequence = trunc(sequence)` checks, and explicit range `0..18446744073709551615`; candidate watermark uses the same checks with `dns_sequence`. NULL is permitted only where event/candidate shape allows it. Fractional rejection fixtures were added; no rounding is accepted as validation.
+- Schema/fixture definitions do not prove live behavior, append-only runtime permissions, or adapter replay no-op semantics.
 
 ### Checks and Limits
-- Documentation reviewed against Task 002 and current core; Markdown whitespace/link checks recorded after editing.
-- No PostgreSQL, Docker, or `psql` available. No SQL tests, migration execution, adapter tests, or production-readiness claim.
-- Historical Cargo results above are not results of this documentation milestone.
+- Planning documentation was reviewed against Task 002 and core; Markdown whitespace/link checks were recorded for that earlier update.
+- PostgreSQL, Docker, and `psql` were unavailable during recorded schema work. Fixtures exist but live execution remains pending; no migration execution or adapter verification is claimed.
+- This reconciliation reviewed schema commit `8b1747f` and fixture documentation; only documentation changed. Historical Cargo results above are not results of this update.
 
 ### Remaining Work
-1. Approve contract and establish deployment history before drafting schema/tests.
-2. Draft schema and exact invariant tests; then verify live on PostgreSQL 16 when tooling is available.
+1. Establish deployment history before any deployment/replacement; schema branch remains unmerged and not production-ready.
+2. Verify draft schema and all invariant fixtures live on PostgreSQL 16 when tooling is available.
 3. Propose synchronous PostgreSQL driver, implement adapter using shared classifier/eligibility helper, and run restart/replay/concurrency tests.
-4. Address TLS before nonlocal database access. Source timestamp strings remain opaque, not validated chronological timestamps.
+4. Establish append-only runtime-role grants and address TLS before nonlocal database access. Source timestamp strings remain opaque, not validated chronological timestamps.

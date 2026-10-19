@@ -2,7 +2,7 @@
 
 ## Status
 
-**Planning ready; implementation pending.** This milestone is documentation-only. It does not add executable SQL, modify migrations, add a PostgreSQL adapter, or establish production readiness.
+**Schema draft on unmerged branch; Task 003 incomplete.** Planning was documentation-only. Subsequent schema work on `alharitz/task003-schema` through `8b1747f` adds standalone `migrations/002_passive_schema.sql` and `sql/fixtures/`; these are not merged into `main` or this documentation branch. Live PostgreSQL verification, adapter implementation, and deployment gates remain pending. Schema branch is not production-ready.
 
 ## Goal
 
@@ -15,7 +15,7 @@ See [`docs/POSTGRES_CONTRACT.md`](../docs/POSTGRES_CONTRACT.md). Core decisions:
 - Separate domain lock anchor from candidate rows. DNS errors preserve error facts but create no candidate.
 - Shared exact identity across DNS and CT: `(domain, namespace, event_id)`; cross-kind collisions fail.
 - Preserve full immutable payload and source timestamp strings.
-- DNS sequence uses lossless `numeric(20,0)` with u64 bounds. One DNS namespace per domain. `(domain, sequence)` is unique across errors, stale successes, and applied successes.
+- DNS sequence uses unconstrained `NUMERIC` with exact integral and u64 checks: `sequence = trunc(sequence) AND sequence >= 0 AND sequence <= 18446744073709551615`. Both event sequence and candidate watermark permit NULL only where their shapes allow it. `NUMERIC(20,0)` is not used: it can round fractional input before validation. One DNS namespace per domain. `(domain, sequence)` is unique across errors, stale successes, and applied successes.
 - Preserve ordered DNS records, including duplicates, through ordinals.
 - CT deduplicates events, not certificates. Success history retains raw evidence reference, status, applied flag, and acceptance order.
 - Findings use nullable `from`; only applied history creates findings. Multiple brands are supported.
@@ -28,15 +28,15 @@ See [`docs/POSTGRES_CONTRACT.md`](../docs/POSTGRES_CONTRACT.md). Core decisions:
 
 ## Required checks after approval
 
-Schema tests must cover identity cross-kind collision, maximum u64 and overflow, repeated certificate IDs as distinct events, error-before-candidate, ordered duplicate DNS records, many brands, initial CT nullable `from`, schema shape, rollback, and restrictive deletes.
+Schema tests must cover identity cross-kind collision, maximum u64 and negative/fractional/overflow rejection, repeated certificate IDs as distinct events, error-before-candidate, ordered duplicate DNS records, many brands, initial CT nullable `from`, schema shape, rollback, and restrictive deletes. Fixtures exist on the schema branch; live PostgreSQL 16 execution remains pending. Commit `8b1747f` replaces `NUMERIC(20,0)` with unconstrained `NUMERIC` plus integral checks and adds fractional-input rejection cases; this is not a runtime verification result.
 
 ## Staged implementation
 
 1. Gate: approve contract and establish migration/deployment history. Existing `migrations/001_passive_slice.sql` is incompatible and unvalidated; never destructively reset it.
-2. Draft PostgreSQL 16 schema and invariant tests.
-3. Run live SQL verification when PostgreSQL/Docker/`psql` is available.
-4. Propose and implement synchronous adapter, then restart/replay/concurrency tests.
+2. Draft PostgreSQL 16 schema and invariant tests: present only on unmerged schema branch through `8b1747f`. Draft is standalone, not additive; never run 002 after 001 or reset existing data. Verify only in a new disposable, empty database.
+3. Run live PostgreSQL 16 schema/fixture verification when tooling is available; pending.
+4. Propose and implement synchronous adapter, then restart/replay/concurrency tests. Establish runtime-role grants and TLS before nonlocal access; pending.
 
-## Non-goals
+## Non-goals and limits
 
-No executable SQL, migration replacement, source/core edits, dependency addition, live source integration, HTTP probing, CLI/API/UI, or production-readiness claim. No PostgreSQL, Docker, or `psql` verification is possible in current environment.
+Schema draft does not replace deployed migrations or implement adapter behavior, source/core changes, dependencies, live sources, HTTP probing, CLI/API/UI, or production readiness. This reconciliation changes documentation only. PostgreSQL, Docker, and `psql` were unavailable during recorded schema work; no live SQL success is claimed. Direct duplicate inserts reject both exact and conflicting replay; adapter replay no-op semantics remain unimplemented.
