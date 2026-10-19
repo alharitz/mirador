@@ -41,8 +41,11 @@ jobs:
           sudo apt-get install --yes postgresql-client-16
       - name: Verify standalone schema and fixtures in separate sessions
         run: |
+          set -euo pipefail
           psql -X -v ON_ERROR_STOP=1 -f migrations/002_passive_schema.sql
           psql -X -v ON_ERROR_STOP=1 -f sql/fixtures/01_schema_invariant_tests.sql
           psql -X -v ON_ERROR_STOP=1 -f sql/fixtures/02_replay_tests.sql
           psql -X -v ON_ERROR_STOP=1 -f sql/fixtures/03_transition_finding_tests.sql
           psql -X -v ON_ERROR_STOP=1 -f sql/fixtures/04_ct_dns_behavior_tests.sql
+          psql -X -v ON_ERROR_STOP=1 -f sql/fixtures/05_runtime_permissions_tests.sql
+          psql -X -v ON_ERROR_STOP=1 -f sql/fixtures/06_envelope_sealing_tests.sql

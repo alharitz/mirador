@@ -1,25 +1,46 @@
 # Standalone fresh-schema draft checks
 
-PostgreSQL 16 target. **Not live-verified. Not an additive migration.**
+PostgreSQL 16 target. **Standalone test schema, not an additive migration.**
+Schema and fixtures `01`–`06` passed locally on PostgreSQL 16.15 in a disposable
+Podman container on 2026-10-20. This is not production or adapter verification.
 `001_passive_slice.sql` is incompatible. Do not run 002 after 001, drop existing
 objects, or reset a database to bypass deployment history. Use a new disposable,
 empty database only. Establish deployment history before deployment.
 
-From repository root, with PostgreSQL 16 tools installed:
+From repository root, with PostgreSQL 16 tools installed and a superuser test
+connection (required for disposable role creation and `SET ROLE`). Run only against
+a new disposable cluster/database, never an existing database. Each `psql` command
+opens a separate session; stop immediately on any failure. CI uses the same order.
 
 ```sh
+set -eu
 createdb mirador_schema_test
 psql -X -v ON_ERROR_STOP=1 -d mirador_schema_test -f migrations/002_passive_schema.sql
 psql -X -v ON_ERROR_STOP=1 -d mirador_schema_test -f sql/fixtures/01_schema_invariant_tests.sql
 psql -X -v ON_ERROR_STOP=1 -d mirador_schema_test -f sql/fixtures/02_replay_tests.sql
 psql -X -v ON_ERROR_STOP=1 -d mirador_schema_test -f sql/fixtures/03_transition_finding_tests.sql
 psql -X -v ON_ERROR_STOP=1 -d mirador_schema_test -f sql/fixtures/04_ct_dns_behavior_tests.sql
+psql -X -v ON_ERROR_STOP=1 -d mirador_schema_test -f sql/fixtures/05_runtime_permissions_tests.sql
+psql -X -v ON_ERROR_STOP=1 -d mirador_schema_test -f sql/fixtures/06_envelope_sealing_tests.sql
 ```
 
-Every fixture includes `helpers.sql` relative to itself, asserts results, checks
-expected SQLSTATE for negative cases, forces deferred constraints, then rolls
-back all test rows/functions. Unexpected success or wrong failure aborts with
-nonzero psql exit status. No errors are intentionally left uncaught.
+Every fixture includes `helpers.sql` relative to itself, asserts results, and checks
+expected SQLSTATE for negative cases. Unexpected success or wrong failure aborts
+with nonzero psql exit status. No errors are intentionally left uncaught.
+Fixtures `01`–`05` force deferred constraints then roll back their rows/functions;
+`05` also rolls back its test role and grants. Sequence allocation may leave gaps.
+`06` deliberately **commits** populated and empty DNS envelopes as a nonowner role,
+then tests mutation in a later transaction. It leaves `sealed.test` evidence intact.
+Do not rerun it in that database or delete/reset evidence to rerun tests: dispose
+of the test database/container and create a fresh one.
+
+`05` and `06` require no existing domain rows and create unique
+`mirador_fixture05_<backend>_<transaction>` / `mirador_fixture06_<backend>_<transaction>`
+NOLOGIN roles with no elevated attributes or memberships. `06` revokes only its
+role's grants using `DROP OWNED ... RESTRICT`, then drops that role; it owns no
+schema objects. Helpers disappear when each session closes. On any failure,
+dispose of the whole test cluster, since `06` may have committed its role/grants.
+These grants are runnable test setup, **not production provisioning**.
 
 ## Schema shape
 
@@ -47,7 +68,7 @@ Unique nonnegative ordinals plus exact count mean no gaps or later appends after
 sealing. Runtime denial of child UPDATE/DELETE remains essential; trusted owners
 can bypass append-only permissions. No CHECK subqueries or cascades are used.
 
-## Fixture coverage (defined, not runtime-proven)
+## Fixture coverage (locally verified on PostgreSQL 16.15)
 
 - `01`: explicit u64 bounds, canonical host limits, nonempty identities, error
   before candidate, namespace/sequence reservation, ordered duplicate records,
@@ -64,6 +85,15 @@ can bypass append-only permissions. No CHECK subqueries or cascades are used.
   database-generated unique acceptance order.
 - `04`: mixed/invalid DNS/CT payloads, nullable error acceptance status,
   independent CT namespaces, domain/kind mismatch, DNS certificate flag isolation.
+- `05`: nonowner lock EXECUTE denial before explicit grant and success afterward;
+  SELECT/INSERT on required tables, column-only candidate UPDATE, identity sequence
+  USAGE without reset privilege, successful invoker trigger queries; immutable
+  UPDATE/DELETE/TRUNCATE, direct domain FOR UPDATE, schema CREATE, function
+  replacement/ownership, superuser escalation and owner membership all denied.
+- `06`: real runtime-role COMMIT seals ordered duplicate DNS records and empty
+  answers; later append (`23514`), duplicate ordinal (`23505`), record UPDATE/DELETE
+  and count UPDATE (`42501`) rejected. Owner count UPDATE also rejects (`23514`).
+  Failed mutations preserve committed counts and duplicate payloads.
 
 ## Not implemented or proven here
 
@@ -85,7 +115,8 @@ The definer function locks fully qualified `public.domains` with a fixed
 `pg_catalog, pg_temp` search path and fails if anchor is absent. This avoids granting
 runtime UPDATE on immutable domains merely to permit SELECT FOR UPDATE. Its owner
 must be trusted; do not grant runtime ownership or schema/function DDL.
-Role-level denial/grant and two-session blocking/deadlock tests remain pending.
-Restrictive FKs alone do not make unreferenced rows append-only. TLS is required before
-nonlocal access. No live PostgreSQL execution, role, restart, replay, or
-concurrency verification is claimed.
+Role-level denial/grant is locally verified by `05`–`06`, only for their explicit
+test grants. Production role provisioning remains pending. Two-session
+blocking/deadlock, restart, adapter replay, and concurrency verification are not
+claimed here. Restrictive FKs alone do not make unreferenced rows append-only.
+TLS is required before nonlocal access. GitHub-hosted CI success is not claimed.
