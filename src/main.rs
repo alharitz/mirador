@@ -2,6 +2,7 @@ use std::env;
 use std::process;
 
 mod core;
+pub mod storage;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
