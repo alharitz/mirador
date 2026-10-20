@@ -9,6 +9,9 @@ pub enum StorageError {
     InvalidEventIdentity,
     ConflictingReplay(SourceEvent),
     Database,
+    /// Commit acknowledgement was lost; outcome may be committed or rolled back.
+    /// Reconnect and retry the SAME (domain, namespace, event_id) and exact payload,
+    /// never a new identity: exact replay safely resolves an already committed event.
     AmbiguousCommit,
 }
 
@@ -121,7 +124,13 @@ impl PostgresStore {
             )
             .map_err(db)?;
         }
-        tx.commit().map_err(|_| StorageError::AmbiguousCommit)
+        tx.commit().map_err(|error| {
+            if error.as_db_error().is_some() {
+                StorageError::Database
+            } else {
+                StorageError::AmbiguousCommit
+            }
+        })
     }
 
     pub fn candidate(&mut self, domain: &str) -> Result<Option<Candidate>, StorageError> {
@@ -129,25 +138,21 @@ impl PostgresStore {
         let row = self
             .client
             .query_opt(
-                "SELECT status, trunc(dns_sequence)::text, ct_observed FROM public.candidates WHERE domain=$1",
+                "SELECT status, trunc(dns_sequence)::text, ct_observed,
+                 ARRAY(SELECT brand FROM public.brands WHERE domain=$1 ORDER BY brand COLLATE \"C\")
+                 FROM public.candidates WHERE domain=$1",
                 &[&domain],
             )
             .map_err(db)?;
         let Some(row) = row else { return Ok(None) };
-        let brands = self
-            .client
-            .query(
-                "SELECT brand FROM public.brands WHERE domain=$1 ORDER BY brand COLLATE \"C\"",
-                &[&domain],
-            )
-            .map_err(db)?
-            .into_iter()
-            .map(|r| r.try_get(0).map_err(db))
-            .collect::<Result<_, _>>()?;
         Ok(Some(Candidate {
             domain,
             status: status(row.try_get::<_, Option<String>>(0).map_err(db)?)?,
-            brand_associations: brands,
+            brand_associations: row
+                .try_get::<_, Vec<String>>(3)
+                .map_err(db)?
+                .into_iter()
+                .collect(),
             dns_sequence: row
                 .try_get::<_, Option<String>>(1)
                 .map_err(db)?
@@ -160,8 +165,9 @@ impl PostgresStore {
     pub fn ct_evidence(&mut self, domain: &str) -> Result<Vec<CtEvidence>, StorageError> {
         let domain = canonical_hostname(domain).map_err(StorageError::InvalidHostname)?;
         self.client.query(
-            "SELECT namespace, event_id, certificate_id, observed_at FROM public.events
-             WHERE domain=$1 AND kind='ct' ORDER BY domain, namespace COLLATE \"C\", event_id COLLATE \"C\"",
+            "SELECT e.namespace, e.event_id, e.certificate_id, e.observed_at FROM public.events e
+             JOIN public.success_history h USING (domain, namespace, event_id, kind)
+             WHERE e.domain=$1 AND e.kind='ct' ORDER BY h.acceptance_order",
             &[&domain],
         ).map_err(db)?.into_iter().map(|r| Ok(CtEvidence {
             event: SourceEvent { domain: domain.clone(), namespace: r.try_get(0).map_err(db)?, event_id: r.try_get(1).map_err(db)? },
