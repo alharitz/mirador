@@ -86,11 +86,13 @@ never place credentials, connection secrets, or private keys in these records.
   wrong-hostname and plaintext connections fail. Encryption without peer identity
   verification is insufficient; no insecure fallback or plaintext retry.
 - Loopback-only development is a separate, explicitly approved boundary, not TLS
-  proof. Current Compose host mapping `5432:5432` does not restrict exposure to
-  loopback; `.env.example` uses `sslmode=disable`. Neither is a deployment template.
-  Container service name `db` is not host loopback. Require separately reviewed
-  binding/firewall and transport configuration before use beyond isolated local
-  development; this document changes neither file.
+  proof. A Compose host mapping `5432:5432` is unrestricted, not loopback-only;
+  verify the effective binding rather than assuming containment. Even a binding
+  to `127.0.0.1` is containment, not TLS. `.env.example` uses plaintext
+  `sslmode=disable` for isolated local development only, not as a deployment
+  template. Container service name `db` is not host loopback. Require separately
+  reviewed binding/firewall and transport configuration before use beyond isolated
+  local development; this document changes neither file.
 
 ## 6. Adapter, restart and replay acceptance
 
