@@ -14,7 +14,7 @@ services:
       # Exposed to the host only so you can point a local psql/GUI client at
       # it during dev. The app talks to "db:5432" over the compose network,
       # not through this mapping.
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
@@ -40,7 +40,7 @@ services:
       MIRADOR_API_TOKEN: ${MIRADOR_API_TOKEN}
       MIRADOR_HTTP_ADDR: ${MIRADOR_HTTP_ADDR}
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     depends_on:
       db:
         condition: service_healthy
