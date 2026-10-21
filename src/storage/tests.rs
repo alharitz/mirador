@@ -1,5 +1,318 @@
 use super::{PostgresStore, StorageError};
+use crate::core::dns::{DnsObservation, DnsProbeOutcome, DnsRecord, ProbeResult};
 use crate::core::domain_status::DomainStatus;
+
+fn dns(outcome: DnsProbeOutcome) -> ProbeResult {
+    ProbeResult::Success(DnsObservation {
+        probe_outcome: outcome,
+        has_certificate: true,
+    })
+}
+
+#[test]
+#[ignore = "requires disposable PostgreSQL 16 with standalone schema 002 and runtime grants"]
+fn dns_ordered_raw_records_max_sequence_and_replay() {
+    let domain = "dns-raw.test";
+    let mut s = store();
+    let mut db = connect("MIRADOR_TEST_ADMIN_URL");
+    let records = vec![
+        DnsRecord::A("192.0.2.1".parse().unwrap()),
+        DnsRecord::MX(u16::MAX, "Mx.Raw.".into()),
+        DnsRecord::NS("".into()),
+        DnsRecord::NS("".into()),
+    ];
+    let payload = dns(DnsProbeOutcome::Answer(records.clone()));
+    s.observe_dns_event(domain, "dns", "one", u64::MAX, payload.clone(), "opaque")
+        .unwrap();
+    let candidate = s.candidate(domain).unwrap().unwrap();
+    assert_eq!(candidate.dns_sequence, Some(u64::MAX));
+    assert_eq!(candidate.status, Some(DomainStatus::MailReady));
+    assert!(!candidate.ct_observed);
+    assert_eq!(counts(&mut db, domain), [1, 1, 1, 1, 0]);
+    let rows = db.query("SELECT ordinal, host(value_a), value_mx_pref, value_mx_exchange, value_ns FROM dns_records WHERE domain=$1 ORDER BY ordinal", &[&domain]).unwrap();
+    assert_eq!(rows.len(), 4);
+    for (i, row) in rows.iter().enumerate() {
+        assert_eq!(row.get::<_, i32>(0), i as i32);
+    }
+    assert_eq!(rows[0].get::<_, String>(1), "192.0.2.1");
+    assert_eq!(rows[1].get::<_, i32>(2), 65535);
+    assert_eq!(rows[1].get::<_, String>(3), "Mx.Raw.");
+    assert_eq!(rows[2].get::<_, String>(4), "");
+    assert_eq!(rows[3].get::<_, String>(4), "");
+    // Integral NUMERIC values may retain scale when written by another adapter.
+    db.execute(
+        "UPDATE events SET sequence=sequence*1.000 WHERE domain=$1",
+        &[&domain],
+    )
+    .unwrap();
+    db.execute(
+        "UPDATE candidates SET dns_sequence=dns_sequence*1.000 WHERE domain=$1",
+        &[&domain],
+    )
+    .unwrap();
+    drop(s);
+    let mut s = store();
+    assert_eq!(s.candidate(domain).unwrap(), Some(candidate));
+    s.observe_dns_event(domain, "dns", "one", u64::MAX, payload.clone(), "opaque")
+        .unwrap();
+    let mut reordered = records.clone();
+    reordered.swap(0, 1);
+    let mut changed_raw = records.clone();
+    changed_raw[1] = DnsRecord::MX(u16::MAX, "mx.raw.".into());
+    for replacement in [
+        dns(DnsProbeOutcome::Answer(reordered)),
+        dns(DnsProbeOutcome::Answer(changed_raw)),
+        dns(DnsProbeOutcome::Answer(records[..3].to_vec())),
+        dns(DnsProbeOutcome::ServFail),
+        dns(DnsProbeOutcome::Timeout),
+        ProbeResult::Success(DnsObservation {
+            probe_outcome: DnsProbeOutcome::Answer(records),
+            has_certificate: false,
+        }),
+    ] {
+        assert!(matches!(
+            s.observe_dns_event(domain, "dns", "one", u64::MAX, replacement, "opaque"),
+            Err(StorageError::ConflictingReplay(_))
+        ));
+    }
+    for (sequence, time) in [(u64::MAX - 1, "opaque"), (u64::MAX, "changed")] {
+        assert!(matches!(
+            s.observe_dns_event(domain, "dns", "one", sequence, payload.clone(), time),
+            Err(StorageError::ConflictingReplay(_))
+        ));
+    }
+    assert_eq!(
+        s.observe_dns_event(domain, "dns", "other", u64::MAX, payload.clone(), "opaque"),
+        Err(StorageError::ConflictingSequence(domain.into()))
+    );
+    assert_eq!(
+        s.observe_dns_event(domain, "other", "other", 0, payload, "opaque"),
+        Err(StorageError::ConflictingNamespace(domain.into()))
+    );
+    assert_eq!(counts(&mut db, domain), [1, 1, 1, 1, 0]);
+}
+
+#[test]
+#[ignore = "requires disposable PostgreSQL 16 with standalone schema 002 and runtime grants"]
+fn dns_errors_replay_after_ct_without_state_or_watermark_changes() {
+    let domain = "dns-errors.test";
+    let mut s = store();
+    let mut db = connect("MIRADOR_TEST_ADMIN_URL");
+    s.observe_dns_event(domain, "dns", "timeout", u64::MAX, ProbeResult::Timeout, "")
+        .unwrap();
+    assert_eq!(s.candidate(domain).unwrap(), None);
+    assert_eq!(counts(&mut db, domain), [1, 1, 0, 0, 0]);
+    s.observe_dns_event(domain, "dns", "ok", 10, dns(DnsProbeOutcome::NxDomain), "")
+        .unwrap();
+    let before = s.candidate(domain).unwrap();
+    s.observe_dns_event(
+        domain,
+        "dns",
+        "servfail",
+        11,
+        ProbeResult::ServFail,
+        "error",
+    )
+    .unwrap();
+    assert_eq!(s.candidate(domain).unwrap(), before);
+    assert_eq!(counts(&mut db, domain), [1, 3, 1, 1, 0]);
+    s.record_ct(domain, "ct", "ct", "cert", "").unwrap();
+    let before = s.candidate(domain).unwrap();
+    let totals = counts(&mut db, domain);
+    for (id, seq, result, time) in [
+        ("timeout", u64::MAX, ProbeResult::Timeout, ""),
+        ("servfail", 11, ProbeResult::ServFail, "error"),
+    ] {
+        s.observe_dns_event(domain, "dns", id, seq, result, time)
+            .unwrap();
+        assert!(matches!(
+            s.observe_dns_event(domain, "dns", id, seq, dns(DnsProbeOutcome::ServFail), time),
+            Err(StorageError::ConflictingReplay(_))
+        ));
+    }
+    assert_eq!(s.candidate(domain).unwrap(), before);
+    assert_eq!(counts(&mut db, domain), totals);
+    let rows = db.query("SELECT status_at_event FROM events WHERE domain=$1 AND outcome IN ('timeout','servfail') ORDER BY sequence", &[&domain]).unwrap();
+    assert_eq!(
+        rows[0].get::<_, Option<String>>(0),
+        Some("Unregistered".into())
+    );
+    assert_eq!(rows[1].get::<_, Option<String>>(0), None);
+    assert_eq!(
+        s.observe_dns_event(domain, "dns", "reserved", 11, ProbeResult::Timeout, ""),
+        Err(StorageError::ConflictingSequence(domain.into()))
+    );
+    assert!(matches!(
+        s.observe_dns_event(domain, "ct", "ct", 0, ProbeResult::Timeout, ""),
+        Err(StorageError::ConflictingReplay(_))
+    ));
+}
+
+#[test]
+#[ignore = "requires disposable PostgreSQL 16 with standalone schema 002 and runtime grants"]
+fn dns_transitions_stale_history_and_ct_override() {
+    let domain = "dns-state.test";
+    let mut s = store();
+    let mut db = connect("MIRADOR_TEST_ADMIN_URL");
+    for (id, seq, outcome) in [
+        ("base", 1, DnsProbeOutcome::NxDomain),
+        ("park", 2, DnsProbeOutcome::Answer(vec![])),
+        (
+            "mail",
+            10,
+            DnsProbeOutcome::Answer(vec![DnsRecord::MX(0, "".into())]),
+        ),
+        ("down", 11, DnsProbeOutcome::Answer(vec![])),
+    ] {
+        s.observe_dns_event(domain, "dns", id, seq, dns(outcome), id)
+            .unwrap();
+    }
+    assert_eq!(counts(&mut db, domain), [1, 4, 1, 4, 2]);
+    db.execute("INSERT INTO brands VALUES ($1,'Brand')", &[&domain])
+        .unwrap();
+    let before = s.candidate(domain).unwrap();
+    s.observe_dns_event(
+        domain,
+        "dns",
+        "stale",
+        3,
+        dns(DnsProbeOutcome::NxDomain),
+        "stale",
+    )
+    .unwrap();
+    assert_eq!(s.candidate(domain).unwrap(), before);
+    assert_eq!(counts(&mut db, domain), [1, 5, 1, 5, 2]);
+    s.record_ct(domain, "ct", "cert", "cert", "").unwrap();
+    let before = s.candidate(domain).unwrap();
+    s.observe_dns_event(
+        domain,
+        "dns",
+        "stale-ct",
+        4,
+        dns(DnsProbeOutcome::NxDomain),
+        "",
+    )
+    .unwrap();
+    assert_eq!(s.candidate(domain).unwrap(), before);
+    s.observe_dns_event(
+        domain,
+        "dns",
+        "new-ct",
+        12,
+        dns(DnsProbeOutcome::NxDomain),
+        "",
+    )
+    .unwrap();
+    let candidate = s.candidate(domain).unwrap().unwrap();
+    assert_eq!(candidate.status, Some(DomainStatus::Certified));
+    assert_eq!(candidate.dns_sequence, Some(12));
+    assert_eq!(
+        candidate.brand_associations,
+        before.unwrap().brand_associations
+    );
+    s.observe_dns_event(
+        domain,
+        "dns",
+        "park",
+        2,
+        dns(DnsProbeOutcome::Answer(vec![])),
+        "park",
+    )
+    .unwrap();
+    let rows = db
+        .query(
+            "SELECT status, applied FROM success_history WHERE domain=$1 ORDER BY acceptance_order",
+            &[&domain],
+        )
+        .unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.get::<_, String>(0), r.get::<_, bool>(1)))
+            .collect::<Vec<_>>(),
+        vec![
+            ("Unregistered".into(), true),
+            ("RegisteredParked".into(), true),
+            ("MailReady".into(), true),
+            ("RegisteredParked".into(), true),
+            ("Unregistered".into(), false),
+            ("Certified".into(), true),
+            ("Certified".into(), false),
+            ("Certified".into(), true)
+        ]
+    );
+    assert_eq!(counts(&mut db, domain), [1, 8, 1, 8, 3]);
+}
+
+#[test]
+#[ignore = "requires disposable PostgreSQL 16 with standalone schema 002 and runtime grants"]
+fn dns_invalid_and_failed_transactions_leave_no_reservations() {
+    let domain = "dns-rollback.test";
+    let mut s = store();
+    let mut db = connect("MIRADOR_TEST_ADMIN_URL");
+    for outcome in [DnsProbeOutcome::ServFail, DnsProbeOutcome::Timeout] {
+        assert_eq!(
+            s.observe_dns_event(domain, "dns", "one", 1, dns(outcome), ""),
+            Err(StorageError::InvalidDnsObservation)
+        );
+    }
+    assert_eq!(
+        s.observe_dns_event(domain, "", "one", 1, ProbeResult::Timeout, ""),
+        Err(StorageError::InvalidEventIdentity)
+    );
+    assert_eq!(
+        s.observe_dns_event(domain, "dns", "", 1, ProbeResult::Timeout, ""),
+        Err(StorageError::InvalidEventIdentity)
+    );
+    assert!(matches!(
+        s.observe_dns_event("INVALID.test", "dns", "one", 1, ProbeResult::Timeout, ""),
+        Err(StorageError::InvalidHostname(_))
+    ));
+    assert_eq!(counts(&mut db, domain), [0, 0, 0, 0, 0]);
+    for deferred in [false, true] {
+        db.batch_execute("CREATE FUNCTION public.fail_dns_test() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.domain='dns-rollback.test' THEN RAISE EXCEPTION 'forced failure'; END IF; RETURN NEW; END $$;").unwrap();
+        let trigger = if deferred {
+            "CREATE CONSTRAINT TRIGGER fail_dns_test AFTER INSERT ON success_history DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.fail_dns_test()"
+        } else {
+            "CREATE TRIGGER fail_dns_test BEFORE INSERT ON success_history FOR EACH ROW EXECUTE FUNCTION public.fail_dns_test()"
+        };
+        db.batch_execute(trigger).unwrap();
+        let result = s.observe_dns_event(
+            domain,
+            "dns",
+            "one",
+            1,
+            dns(DnsProbeOutcome::Answer(vec![DnsRecord::NS("Raw.".into())])),
+            "",
+        );
+        db.batch_execute(
+            "DROP TRIGGER fail_dns_test ON success_history; DROP FUNCTION public.fail_dns_test()",
+        )
+        .unwrap();
+        assert_eq!(result, Err(StorageError::Database));
+        assert_eq!(counts(&mut db, domain), [0, 0, 0, 0, 0]);
+        for table in ["dns_records", "dns_streams"] {
+            assert_eq!(
+                db.query_one(
+                    &format!("SELECT count(*) FROM {table} WHERE domain=$1"),
+                    &[&domain]
+                )
+                .unwrap()
+                .get::<_, i64>(0),
+                0
+            );
+        }
+    }
+    s.observe_dns_event(
+        domain,
+        "new-stream",
+        "one",
+        1,
+        dns(DnsProbeOutcome::Answer(vec![])),
+        "",
+    )
+    .unwrap();
+    assert_eq!(counts(&mut db, domain), [1, 1, 1, 1, 0]);
+}
 use postgres::{Client, NoTls};
 
 // Only disposable local PostgreSQL: schema 002 and runtime grants must already exist.
