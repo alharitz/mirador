@@ -44,7 +44,7 @@
 - Docker build not verified (Docker unavailable in current environment)
 
 ### Remaining Work
-- Task 002 in-memory passive prototype is verified (2026-10-19; see below). Task 003 schema milestone passed local Podman PostgreSQL 16.15 schema plus fixtures 01–06 on 2026-10-20, including non-owner runtime permissions, committed envelope sealing, and separate same/different-domain bounded-concurrency checks with explicit COMMIT/ROLLBACK. Branch remains unmerged; adapter remains pending. Task 003 is incomplete and not production-ready.
+- Task 002 in-memory passive prototype is verified (2026-10-19; see below). Task 003 schema milestone passed local Podman PostgreSQL 16.15 schema plus fixtures 01-06 on 2026-10-20, including non-owner runtime permissions, committed envelope sealing, and separate same/different-domain bounded-concurrency checks with explicit COMMIT/ROLLBACK. Schema is merged in `9a5b2cc` and complete; deployment and production gates remain open. CT-only adapter is merged in `232c116`; DNS adapter remains in review and its independent execution gate is incomplete.
 - Existing `migrations/001_passive_slice.sql` is an unvalidated prototype incompatible with the approved contract; establish deployment history before replacement and never use a destructive reset.
 - Docker build and compose runtime verification when available.
 - Phase-1 release gates remain pending; local foundation checks are not release completion.
@@ -75,7 +75,7 @@
 - Task 002 acceptance checks complete, including explicit JSONL deferral: `JSONL output is unsupported without a maintained serializer`.
 
 ### Boundaries and Remaining Work
-- Task 003 schema and fixtures are merged in `9a5b2cc`; local live SQL verification passed on 2026-10-20 with Podman PostgreSQL 16.15 using a fresh database. Existing `migrations/001_passive_slice.sql` is incompatible and unvalidated; do not run it or replace it before establishing deployment history. Adapter remains pending.
+- Task 003 schema and fixtures are merged in `9a5b2cc`; schema milestone is complete. Local live SQL verification passed on 2026-10-20 with Podman PostgreSQL 16.15 using a fresh database. Existing `migrations/001_passive_slice.sql` is incompatible and unvalidated; do not run it or replace it before establishing deployment history. CT-only adapter is merged in `232c116`; DNS adapter remains in review with independent execution incomplete.
 - No live sources, CLI wiring, API, or UI implemented for this prototype. Docker build and compose runtime remain unverified; phase-1 release gates remain pending.
 - Limits: canonical lowercase ASCII hostnames only, timestamps retained as source strings, unbounded volatile memory.
 - JSONL remains deferred pending a maintained serializer; NS/IP-change and same-status MX alerts remain deferred pending semantics.
