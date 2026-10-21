@@ -2,7 +2,7 @@
 
 ## Status
 
-**Schema milestone verified on unmerged branch; Task 003 incomplete.** Schema work on `alharitz/task003-schema` adds standalone `migrations/002_passive_schema.sql` and `sql/fixtures/`; these remain present in this schema branch and are not merged into `main`. On 2026-10-20, local Podman PostgreSQL 16.15 ran schema plus fixtures 01–06 successfully on a fresh database, including non-owner runtime permission checks and separate same/different-domain bounded-concurrency checks with explicit COMMIT/ROLLBACK. Adapter implementation and deployment gates remain pending. Schema branch is not production-ready.
+**Schema milestone verified and merged in `9a5b2cc`; Task 003 schema scope is complete.** Schema work from `alharitz/task003-schema` adds standalone `migrations/002_passive_schema.sql` and `sql/fixtures/`. On 2026-10-20, local Podman PostgreSQL 16.15 independently ran schema plus fixtures 01-06 successfully on a fresh database, including non-owner runtime permission checks and separate same/different-domain bounded-concurrency checks with explicit COMMIT/ROLLBACK. Adapter, deployment, and production gates remain open.
 
 ## Goal
 

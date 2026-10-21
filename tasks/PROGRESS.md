@@ -75,13 +75,13 @@
 - Task 002 acceptance checks complete, including explicit JSONL deferral: `JSONL output is unsupported without a maintained serializer`.
 
 ### Boundaries and Remaining Work
-- Task 003 schema draft and fixtures exist on the unmerged schema branch through `8b1747f`; local live SQL verification passed on 2026-10-20 with Podman PostgreSQL 16.15 using a fresh database. Existing `migrations/001_passive_slice.sql` is incompatible and unvalidated; do not run it or replace it before establishing deployment history. Adapter remains pending.
+- Task 003 schema and fixtures are merged in `9a5b2cc`; local live SQL verification passed on 2026-10-20 with Podman PostgreSQL 16.15 using a fresh database. Existing `migrations/001_passive_slice.sql` is incompatible and unvalidated; do not run it or replace it before establishing deployment history. Adapter remains pending.
 - No live sources, CLI wiring, API, or UI implemented for this prototype. Docker build and compose runtime remain unverified; phase-1 release gates remain pending.
 - Limits: canonical lowercase ASCII hostnames only, timestamps retained as source strings, unbounded volatile memory.
 - JSONL remains deferred pending a maintained serializer; NS/IP-change and same-status MX alerts remain deferred pending semantics.
 
 ## Milestone 003: PostgreSQL Schema Contract and Plan
-**Status**: Schema milestone verified on unmerged branch; Task 003 incomplete (2026-10-20). Subsequent `alharitz/task003-schema` work through `8b1747f` contains standalone schema and fixtures, present in this schema branch but not merged into `main`. Local Podman PostgreSQL 16.15 schema plus fixtures 01–06 passed on a fresh database, including non-owner runtime permissions, committed envelope sealing, and separate same/different-domain bounded-concurrency checks with explicit COMMIT/ROLLBACK. Adapter remains pending; branch is not production-ready.
+**Status**: Schema milestone verified and merged in `9a5b2cc`; Task 003 schema scope is complete, while deployment and production gates remain open (2026-10-20). The merged schema contains standalone schema and fixtures from `alharitz/task003-schema`. Local Podman PostgreSQL 16.15 schema plus fixtures 01–06 passed on a fresh database, including non-owner runtime permissions, committed envelope sealing, and separate same/different-domain bounded-concurrency checks with explicit COMMIT/ROLLBACK. Task 004 adapter work is partial; branch is not production-ready.
 
 ### Planning Completed
 - Contract recorded in `docs/POSTGRES_CONTRACT.md`; staged tasks in `tasks/003-postgres-schema.md`.
@@ -89,7 +89,7 @@
 - Existing `migrations/001_passive_slice.sql` remains incompatible. Establish deployment history before replacement; never use a destructive reset.
 
 ### Schema Draft Recorded
-- Schema branch contains standalone `migrations/002_passive_schema.sql` and `sql/fixtures/`; 002 is not an additive migration and must never run after 001. Verification requires a new disposable, empty database.
+- Merged schema contains standalone `migrations/002_passive_schema.sql` and `sql/fixtures/`; 002 is not an additive migration and must never run after 001. Verification requires a new disposable, empty database.
 - Commit `8b1747f` replaces `NUMERIC(20,0)` sequence columns with unconstrained `NUMERIC`, exact `sequence = trunc(sequence)` checks, and explicit range `0..18446744073709551615`; candidate watermark uses the same checks with `dns_sequence`. NULL is permitted only where event/candidate shape allows it. Fractional rejection fixtures were added; no rounding is accepted as validation.
 - Local verification proves schema and fixture behavior, including non-owner runtime permissions and committed DNS envelope sealing. It does not prove adapter replay no-op semantics, deployment history, restart behavior, or nonlocal TLS.
 
@@ -102,7 +102,7 @@
 - CI attempts for `e724b57` completed with infrastructure failure before any steps ran: [run 39291507845](https://github.com/alharitz/mirador/actions/runs/39291507845) and [run 39291507440](https://github.com/alharitz/mirador/actions/runs/39291507440). GitHub annotation: `The job was not started because your account is locked due to a billing issue.` No SQL executed; resolve account billing and rerun before claiming live verification.
 
 ### Remaining Work
-1. Establish deployment history before any deployment/replacement; schema branch remains unmerged and not production-ready.
+1. Establish deployment history before any deployment/replacement; deployment history remains unresolved and production readiness is open.
 2. Preserve fresh-db-only boundary; deployment history remains unresolved. Local PostgreSQL 16.15 schema/fixture verification is complete, but GitHub CI remains billing-blocked.
 3. Propose synchronous PostgreSQL driver, implement adapter using shared classifier/eligibility helper, and run restart/replay/concurrency tests.
 4. Runtime-role grants are verified for test role boundaries; distinguish these test grants from production provisioning. Address TLS before nonlocal database access. Source timestamp strings remain opaque, not validated chronological timestamps.
